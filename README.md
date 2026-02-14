@@ -1,60 +1,76 @@
-# PDF Editor with Image & Signature Overlay
+# Forge PDF Editor
 
-A powerful, client-side PDF editor built with Next.js that allows you to overlay images and signatures onto PDF documents.
+Forge PDF Editor is a client-side PDF editor built with Next.js. It supports page-by-page editing with text, images, and signatures, then exports a clean final PDF.
+
+## Live App
+
+- Production: https://forge-pdf-editor.vercel.app
 
 ## Features
 
-### 📄 PDF Management
-- **Upload PDF**: Drag and drop or select any PDF file.
-- **Preview**: View your PDF pages directly in the browser.
-- **Download**: Generate and download the modified PDF with all overlays embedded.
+### PDF Workflow
+- Upload PDF via file picker or drag and drop
+- Multi-page navigation (Previous/Next + range slider)
+- Page-aware editing (elements are stored per page)
 
-### 🖼️ Image Overlay
-- **Multi-Image Support**: Add multiple images to a single PDF page.
-- **Drag & Drop**: Freely move images around the page.
-- **Resize & Stretch**: 
-  - **Corner Handles**: Resize proportionally.
-  - **Side Handles**: Stretch images horizontally or vertically (unlocked aspect ratio).
-  - **Visual Feedback**: Handles appear on selection and hide on deselect.
-- **Delete**: Right-click context menu to remove images.
+### Editing Tools
+- Add text blocks
+- Add image overlays
+- Add signatures with automatic white-background removal (PNG output)
+- Drag and resize overlays directly on the canvas
+- Select layers from a per-page layers panel
+- Duplicate and delete selected elements
+- Clear current page or clear all pages
 
-### ✍️ Signature Support
-- **Smart Upload**: dedicated "Add Signature" button.
-- **Auto-Background Removal**: Automatically detects and removes white backgrounds from uploaded signature images using client-side processing (Canvas API).
-- **Privacy Focused**: All processing happens in your browser; no data is sent to a server.
+### Text Controls
+- Inline text editing (double-click)
+- Text panel editing
+- Font size adjustment
+- Text color picker
+- Bold toggle
+
+### Productivity
+- Undo / Redo buttons
+- Keyboard shortcuts:
+  - `Ctrl/Cmd + Z` undo
+  - `Ctrl/Cmd + Shift + Z` redo
+  - Arrow keys to nudge selected element
+  - `Delete/Backspace` to remove selected element
+
+### Export
+- Download full edited PDF
+- Export current page as PNG
+- Export current page as JPG
 
 ## Tech Stack
-- **Framework**: Next.js 14 (App Router)
-- **PDF Processing**: `pdf-lib`
-- **PDF Rendering**: `react-pdf`
-- **Interactions**: `react-draggable`, `re-resizable`
-- **Styling**: Vanilla CSS (Responsive & Modern)
-- **Icons**: `lucide-react`
 
-## Getting Started
+- Next.js 16 (App Router)
+- React 19
+- `react-pdf` + `pdfjs-dist` for PDF rendering
+- `pdf-lib` for PDF generation
+- Vanilla CSS (custom responsive UI)
+- `lucide-react` icons
 
-First, run the development server:
+## Local Development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
 ```
 
-Open [http://localhost:3000](http://localhost/3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-## How It Works
+## Build
 
-1. **Upload a PDF** - Click or drag-and-drop your PDF file
-2. **Add Content**:
-   - **Images**: Click "Add Image" to overlay images
-   - **Signatures**: Click "Add Signature" to add a signature (white backgrounds automatically removed)
-   - **Text**: Click "Add Text" to add custom text with a modern modal dialog
-3. **Position & Edit**:
-   - **Drag** any element to reposition it
-   - **Resize** images by selecting them and dragging the corner/edge handles
-   - **Edit Text**: Double-click text to edit it inline
-4. **Download** - Click "Download PDF" to get your modified documentges.
+```bash
+npm run build
+npm run start
+```
+
+## Notes
+
+- All edits happen client-side in the browser.
+- Source PDFs and overlays are not uploaded to any app backend.
 
 ## License
 
