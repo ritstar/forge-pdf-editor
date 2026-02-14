@@ -12,6 +12,7 @@
     "lucide-react": "^0.555.0",
     "next": "16.0.5",
     "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.4.449",
     "re-resizable": "^6.11.2",
     "react": "19.2.0",
     "react-dom": "19.2.0",

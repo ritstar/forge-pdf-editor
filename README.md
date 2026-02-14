@@ -41,20 +41,20 @@ npm run dev
 yarn dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost/3000) with your browser to see the result.
 
-## Usage
+## How It Works
 
-1. **Upload a PDF**: Click the upload area to select your document.
+1. **Upload a PDF** - Click or drag-and-drop your PDF file
 2. **Add Content**:
-   - Click "Add Image" to upload standard images (PNG, JPG).
-   - Click "Add Signature" to upload a signature photo (white background will be removed).
-3. **Edit**:
-   - Click an image to select it.
-   - Drag to move.
-   - Use blue handles to resize or stretch.
-   - Right-click to delete.
-4. **Download**: Click "Download PDF" to save your changes.
+   - **Images**: Click "Add Image" to overlay images
+   - **Signatures**: Click "Add Signature" to add a signature (white backgrounds automatically removed)
+   - **Text**: Click "Add Text" to add custom text with a modern modal dialog
+3. **Position & Edit**:
+   - **Drag** any element to reposition it
+   - **Resize** images by selecting them and dragging the corner/edge handles
+   - **Edit Text**: Double-click text to edit it inline
+4. **Download** - Click "Download PDF" to get your modified documentges.
 
 ## License
 

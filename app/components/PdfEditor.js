@@ -1,5 +1,6 @@
 'use client';
 
+import TextOverlay from './TextOverlay';
 import { useState, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import Draggable from 'react-draggable';
@@ -10,12 +11,17 @@ import 'react-pdf/dist/Page/TextLayer.css';
 // Configure PDF worker
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
-export default function PdfEditor({ pdfFile, images, onPositionChange, onScaleChange, onImageLoad, onImageResize, onImageDelete }) {
+export default function PdfEditor({ pdfFile, images, texts = [], onPositionChange, onScaleChange, onImageLoad, onImageResize, onImageDelete, onTextUpdate, onTextDelete, onTextMove }) {
     const [numPages, setNumPages] = useState(null);
     const [pageNumber, setPageNumber] = useState(1);
     const [scale, setScale] = useState(1.0);
     const [containerWidth, setContainerWidth] = useState(null);
     const containerRef = useRef(null);
+
+    // Assuming 'dimensions' state or prop is available, or needs to be defined.
+    // For now, I'll define a placeholder for 'dimensions' based on the original containerWidth logic.
+    // In a real app, 'dimensions' would likely come from a state or prop, or be calculated more robustly.
+    const [dimensions, setDimensions] = useState({ width: 600, height: 800 }); // Placeholder
 
     function onDocumentLoadSuccess({ numPages }) {
         setNumPages(numPages);
@@ -27,6 +33,9 @@ export default function PdfEditor({ pdfFile, images, onPositionChange, onScaleCh
             if (containerRef.current) {
                 const width = containerRef.current.offsetWidth;
                 setContainerWidth(width);
+                // Update placeholder dimensions based on container width
+                const newPdfWidth = Math.min(width, 800);
+                setDimensions(prev => ({ ...prev, width: newPdfWidth, height: newPdfWidth * (prev.height / prev.width || 1.414) })); // Maintain aspect ratio
             }
         };
 
@@ -116,6 +125,16 @@ export default function PdfEditor({ pdfFile, images, onPositionChange, onScaleCh
                         />
                     );
                 })}
+
+                {texts.map((text) => (
+                    <TextOverlay
+                        key={text.id}
+                        text={text}
+                        onUpdate={onTextUpdate}
+                        onDelete={onTextDelete}
+                        onDragStop={onTextMove}
+                    />
+                ))}
             </div>
 
             {numPages && (
@@ -155,6 +174,7 @@ function ImageOverlay({ image, onDragStop, onResize, onDelete }) {
     // Sync local position with prop when not resizing/dragging
     useEffect(() => {
         if (!isResizing) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setLocalPosition(image.position);
         }
     }, [image.position, isResizing]);
@@ -417,6 +437,7 @@ function ImageOverlay({ image, onDragStop, onResize, onDelete }) {
                                 }}
                                 className="image-container"
                             >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img
                                     src={URL.createObjectURL(image.file)}
                                     alt="Overlay"

@@ -1,27 +1,38 @@
-import { Image as ImageIcon } from 'lucide-react';
+import { useRef } from 'react';
+import { ImageIcon } from 'lucide-react';
 
 export default function ImageUploader({ onUpload }) {
+    const fileInputRef = useRef(null);
+
+    const handleClick = () => {
+        fileInputRef.current?.click();
+    };
+
     const handleFileChange = (e) => {
-        const file = e.target.files[0];
-        if (file && file.type.startsWith('image/')) {
+        const file = e.target.files?.[0];
+        if (file) {
             onUpload(file);
-        } else {
-            alert('Please upload a valid image file.');
+            // Reset input so same file can be selected again if needed
+            e.target.value = '';
         }
     };
 
     return (
-        <div style={{ marginTop: '1rem' }}>
-            <label className="btn btn-secondary w-full gap-2">
+        <>
+            <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileChange}
+                accept="image/*"
+                style={{ display: 'none' }}
+            />
+            <button
+                onClick={handleClick}
+                className="btn btn-secondary"
+            >
                 <ImageIcon size={18} />
-                <span>Upload Overlay Image</span>
-                <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileChange}
-                    className="hidden"
-                />
-            </label>
-        </div>
+                Add Image
+            </button>
+        </>
     );
 }

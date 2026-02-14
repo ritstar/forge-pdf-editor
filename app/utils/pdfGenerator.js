@@ -1,40 +1,102 @@
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
 
-export async function generatePdf({ pdfBytes, images, scale, pageIndex = 0 }) {
-  const pdfDoc = await PDFDocument.load(pdfBytes);
-  const pages = pdfDoc.getPages();
-  const page = pages[pageIndex];
+function hexToRgb(hex) {
+  const normalized = hex.replace('#', '');
+  const value = normalized.length === 3
+    ? normalized
+      .split('')
+      .map((c) => c + c)
+      .join('')
+    : normalized;
 
-  const { width: pdfPageWidth, height: pdfPageHeight } = page.getSize();
-
-  // Process each image
-  for (const imageData of images) {
-    const { bytes, position, dimensions } = imageData;
-
-    // Embed the image
-    let image;
-    const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47;
-    if (isPng) {
-      image = await pdfDoc.embedPng(bytes);
-    } else {
-      image = await pdfDoc.embedJpg(bytes);
-    }
-
-    const imageWidthPdf = dimensions.width / scale;
-    const imageHeightPdf = dimensions.height / scale;
-
-    const xPdf = position.x / scale;
-    // PDF Y is from bottom, Screen Y is from top
-    const yPdf = pdfPageHeight - (position.y / scale) - imageHeightPdf;
-
-    page.drawImage(image, {
-      x: xPdf,
-      y: yPdf,
-      width: imageWidthPdf,
-      height: imageHeightPdf,
-    });
+  if (!/^[0-9a-fA-F]{6}$/.test(value)) {
+    return rgb(0.07, 0.09, 0.15);
   }
 
-  const pdfBytesSaved = await pdfDoc.save();
-  return pdfBytesSaved;
+  const int = Number.parseInt(value, 16);
+  const r = ((int >> 16) & 255) / 255;
+  const g = ((int >> 8) & 255) / 255;
+  const b = (int & 255) / 255;
+  return rgb(r, g, b);
+}
+
+async function embedImage(pdfDoc, file) {
+  const bytes = await file.arrayBuffer();
+  const data = new Uint8Array(bytes);
+
+  try {
+    const isPng = data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47;
+    if (isPng) return await pdfDoc.embedPng(data);
+    return await pdfDoc.embedJpg(data);
+  } catch {
+    try {
+      return await pdfDoc.embedPng(data);
+    } catch {
+      return await pdfDoc.embedJpg(data);
+    }
+  }
+}
+
+export async function generatePdf({ pdfBytes, elements = [] }) {
+  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const pages = pdfDoc.getPages();
+  const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  const imageCache = new Map();
+
+  for (const element of elements) {
+    const page = pages[element.pageIndex];
+    if (!page) continue;
+
+    const { width: pageWidth, height: pageHeight } = page.getSize();
+    const x = element.x * pageWidth;
+    const yTop = element.y * pageHeight;
+    const elementWidth = element.width * pageWidth;
+    const elementHeight = element.height * pageHeight;
+    const y = pageHeight - yTop - elementHeight;
+
+    if (element.type === 'image') {
+      if (!element.file) continue;
+
+      let image = imageCache.get(element.file);
+      if (!image) {
+        image = await embedImage(pdfDoc, element.file);
+        imageCache.set(element.file, image);
+      }
+
+      page.drawImage(image, {
+        x,
+        y,
+        width: elementWidth,
+        height: elementHeight,
+        rotate: degrees(0),
+      });
+      continue;
+    }
+
+    if (element.type === 'text' && element.text) {
+      const lines = element.text.split(/\r?\n/);
+      const font = element.bold ? boldFont : regularFont;
+      const fontSize = Math.max(7, element.fontSize * pageWidth);
+      const lineHeight = fontSize * 1.18;
+      const color = hexToRgb(element.color || '#111827');
+
+      let cursorY = pageHeight - yTop - fontSize;
+      for (const line of lines) {
+        if (cursorY < 0) break;
+        page.drawText(line, {
+          x,
+          y: cursorY,
+          size: fontSize,
+          font,
+          color,
+          maxWidth: elementWidth,
+        });
+        cursorY -= lineHeight;
+      }
+    }
+  }
+
+  return await pdfDoc.save();
 }

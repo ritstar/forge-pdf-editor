@@ -1,32 +1,31 @@
-import { Upload } from 'lucide-react';
+import { UploadCloud } from 'lucide-react';
 
 export default function PdfUploader({ onUpload }) {
     const handleFileChange = (e) => {
         const file = e.target.files[0];
         if (file && file.type === 'application/pdf') {
             onUpload(file);
-        } else {
-            alert('Please upload a valid PDF file.');
         }
     };
 
     return (
-        <div className="card uploader-card">
-            <label className="cursor-pointer flex flex-col items-center gap-4 w-full">
-                <div className="icon-wrapper">
-                    <Upload size={32} />
+        <div className="upload-container">
+            <label htmlFor="pdf-upload" style={{ cursor: 'pointer', display: 'block' }}>
+                <UploadCloud size={64} className="upload-icon" style={{ margin: '0 auto' }} />
+                <div className="upload-text">
+                    Click to upload PDF
                 </div>
-                <div className="text-center">
-                    <h3 className="uploader-title">Upload PDF Document</h3>
-                    <p className="uploader-subtitle">Drag and drop or click to browse</p>
+                <div className="upload-subtext">
+                    or drag and drop your file here
                 </div>
-                <input
-                    type="file"
-                    accept="application/pdf"
-                    onChange={handleFileChange}
-                    className="hidden"
-                />
             </label>
+            <input
+                id="pdf-upload"
+                type="file"
+                accept="application/pdf"
+                onChange={handleFileChange}
+                style={{ display: 'none' }}
+            />
         </div>
     );
 }
