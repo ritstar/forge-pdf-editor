@@ -792,19 +792,6 @@ export default function Home() {
           </div>
         </section>
       )}
-
-      <footer className="app-footer">
-        <p>
-          Forge PDF Editor helps you edit, sign, and export PDFs faster without sending files to a backend.
-        </p>
-        <p className="tagline">
-          Forged with human grit by{' '}
-          <a href="https://github.com/ritstar" target="_blank" rel="noreferrer">
-            RitstaR
-          </a>
-          .
-        </p>
-      </footer>
     </main>
   );
 }

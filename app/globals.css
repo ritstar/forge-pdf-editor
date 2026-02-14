@@ -394,35 +394,3 @@ button:disabled {
     padding: 8px;
   }
 }
-
-.app-footer {
-  border: 1px solid var(--line);
-  background: linear-gradient(100deg, #f8f4ea, #eef7f6);
-  border-radius: 12px;
-  padding: 14px 16px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.app-footer p {
-  margin: 0;
-}
-
-.app-footer .tagline {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.app-footer a {
-  color: var(--accent-strong);
-  text-decoration: none;
-}
-
-.app-footer a:hover {
-  text-decoration: underline;
-}
