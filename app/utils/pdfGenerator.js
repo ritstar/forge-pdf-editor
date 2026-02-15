@@ -20,9 +20,22 @@ function hexToRgb(hex) {
   return rgb(r, g, b);
 }
 
-async function embedImage(pdfDoc, file) {
-  const bytes = await file.arrayBuffer();
-  const data = new Uint8Array(bytes);
+async function readImageBytes(element) {
+  if (element.file) {
+    return new Uint8Array(await element.file.arrayBuffer());
+  }
+
+  if (element.url) {
+    const response = await fetch(element.url);
+    if (!response.ok) throw new Error('Failed to load image asset');
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  throw new Error('No image source available');
+}
+
+async function embedImage(pdfDoc, element) {
+  const data = await readImageBytes(element);
 
   try {
     const isPng = data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47;
@@ -57,12 +70,13 @@ export async function generatePdf({ pdfBytes, elements = [] }) {
     const y = pageHeight - yTop - elementHeight;
 
     if (element.type === 'image') {
-      if (!element.file) continue;
+      if (!element.file && !element.url) continue;
 
-      let image = imageCache.get(element.file);
+      const cacheKey = element.storagePath || element.url || element.file;
+      let image = imageCache.get(cacheKey);
       if (!image) {
-        image = await embedImage(pdfDoc, element.file);
-        imageCache.set(element.file, image);
+        image = await embedImage(pdfDoc, element);
+        imageCache.set(cacheKey, image);
       }
 
       page.drawImage(image, {

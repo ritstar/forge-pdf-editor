@@ -1,77 +1,95 @@
 # Forge PDF Editor
 
-Forge PDF Editor is a client-side PDF editor built with Next.js. It supports page-by-page editing with text, images, and signatures, then exports a clean final PDF.
+Forge PDF Editor is now a full Supabase-backed PDF workspace with user accounts, Google login, saved signatures, and persistent document drafts.
 
 ## Live App
 
 - Production: https://forge-pdf-editor.vercel.app
 
-## Features
+## Core Features
 
-### PDF Workflow
-- Upload PDF via file picker or drag and drop
-- Multi-page navigation (Previous/Next + range slider)
-- Page-aware editing (elements are stored per page)
-
-### Editing Tools
-- Add text blocks
-- Add image overlays
-- Add signatures with automatic white-background removal (PNG output)
-- Drag and resize overlays directly on the canvas
-- Select layers from a per-page layers panel
-- Duplicate and delete selected elements
-- Clear current page or clear all pages
-
-### Text Controls
-- Inline text editing (double-click)
-- Text panel editing
-- Font size adjustment
-- Text color picker
-- Bold toggle
-
-### Productivity
-- Undo / Redo buttons
-- Keyboard shortcuts:
-  - `Ctrl/Cmd + Z` undo
-  - `Ctrl/Cmd + Shift + Z` redo
-  - Arrow keys to nudge selected element
-  - `Delete/Backspace` to remove selected element
-
-### Export
-- Download full edited PDF
-- Export current page as PNG
-- Export current page as JPG
+- Landing page + auth flow (`/`, `/login`, `/signup`)
+- Email/password auth and Google OAuth
+- User-scoped dashboard for uploaded PDFs
+- Draft autosave per document
+- Signature library per user (save once, reuse anytime)
+- Multi-page PDF editing with text, image, and signature overlays
+- Export edited PDF and current page image formats
 
 ## Tech Stack
 
 - Next.js 16 (App Router)
 - React 19
-- `react-pdf` + `pdfjs-dist` for PDF rendering
-- `pdf-lib` for PDF generation
-- Vanilla CSS (custom responsive UI)
-- `lucide-react` icons
+- Supabase Auth + Database + Storage
+- `react-pdf` + `pdfjs-dist`
+- `pdf-lib`
 
-## Local Development
+## Local Setup
+
+1. Install dependencies:
 
 ```bash
 npm install
+```
+
+2. Create env file:
+
+```bash
+cp .env.example .env.local
+```
+
+3. Fill `.env.local`:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+4. Run SQL migrations in Supabase SQL Editor:
+
+- `supabase/schema.sql`
+
+5. Configure Auth providers in Supabase:
+
+- Enable Email provider
+- Enable Google provider
+- Add redirect URLs:
+  - `http://localhost:3000/auth/callback`
+  - `https://forge-pdf-editor.vercel.app/auth/callback`
+
+6. Start dev server:
+
+```bash
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+## Supabase Storage Buckets
 
-## Build
+The app expects these private buckets:
 
-```bash
-npm run build
-npm run start
-```
+- `documents`
+- `draft_assets`
+- `signatures`
+
+The SQL migration also adds RLS storage policies that scope access to each user's folder prefix.
+
+## Draft Model
+
+Each document has one latest draft row in `document_drafts` keyed by `document_id`.
+The editor autosaves after changes and also supports manual save.
 
 ## Notes
 
-- All edits happen client-side in the browser.
-- Source PDFs and overlays are not uploaded to any app backend.
+- All document and signature data is tied to authenticated users.
+- Do not use a service role key in client-side code.
+- If Google OAuth is enabled, ensure callback URL matches exactly in both Supabase and Google Cloud console.
 
-## License
+## Scripts
 
-MIT
+```bash
+npm run dev
+npm run build
+npm run start
+npm run lint
+```

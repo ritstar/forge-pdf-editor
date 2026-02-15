@@ -1,8 +1,8 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'Forge PDF Editor',
-  description: 'Edit PDF files with text, images, signatures, and export controls directly in your browser.',
+  title: 'Forge PDF',
+  description: 'User-based PDF editor with Google login, saved signatures, and draft autosave powered by Supabase.',
 };
 
 export default function RootLayout({ children }) {
