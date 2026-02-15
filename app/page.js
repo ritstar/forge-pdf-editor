@@ -15,10 +15,10 @@ export default function LandingPage() {
       <section className="landing-hero">
         <div>
           <p className="eyebrow">Private workspace for serious PDF workflows</p>
-          <h2>Edit, save drafts, and keep signatures ready for every session.</h2>
+          <h2>A full PDF editor for signing, annotating, and exporting documents.</h2>
           <p>
-            Forge PDF now supports user accounts, Google login, persistent signatures, and autosaved
-            drafts so your work is always waiting when you come back.
+            Upload any PDF, add text, images, and signatures, then export a clean final file.
+            Your drafts and saved signatures stay linked to your account.
           </p>
           <div className="landing-cta">
             <Link href="/signup" className="primary-btn">Start Free</Link>
@@ -26,11 +26,11 @@ export default function LandingPage() {
           </div>
         </div>
         <div className="hero-panel">
-          <h3>Built for repeat document work</h3>
+          <h3>Everything you need in one PDF editor</h3>
           <ul>
-            <li><FileText size={16} /> Resume drafts by account</li>
-            <li><Sparkles size={16} /> Saved signatures library</li>
-            <li><Lock size={16} /> User-scoped storage via Supabase</li>
+            <li><FileText size={16} /> Edit PDFs with text, images, and signatures</li>
+            <li><Sparkles size={16} /> Resume PDF drafts anytime from your dashboard</li>
+            <li><Lock size={16} /> Private, user-scoped document storage</li>
           </ul>
         </div>
       </section>

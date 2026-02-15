@@ -130,7 +130,9 @@ export default function DashboardClient() {
         <div>
           <p className="eyebrow">Workspace</p>
           <h1>Hi {displayName}</h1>
-          <p className="muted">Upload PDFs, resume drafts, and reuse saved signatures.</p>
+          <p className="muted">
+            This is your PDF editor workspace. Upload a PDF, edit with text/images/signatures, and resume drafts anytime.
+          </p>
         </div>
         <div className="header-actions">
           <button className="ghost-btn" onClick={() => router.refresh()}>
@@ -144,21 +146,21 @@ export default function DashboardClient() {
 
       <section className="stats-grid">
         <article className="stat-card">
-          <p className="muted small">Total documents</p>
+          <p className="muted small">PDF files in workspace</p>
           <h3>{documents.length}</h3>
         </article>
         <article className="stat-card">
-          <p className="muted small">Drafts in progress</p>
+          <p className="muted small">PDF drafts in progress</p>
           <h3>{draftCount}</h3>
         </article>
         <article className="stat-card">
-          <p className="muted small">Quick continue</p>
+          <p className="muted small">Continue editing</p>
           {latestDoc ? (
             <Link href={`/editor/${latestDoc.id}`} className="ghost-btn">
-              Open latest draft
+              Open latest PDF draft
             </Link>
           ) : (
-            <p className="muted small">No draft yet</p>
+            <p className="muted small">No PDF draft yet</p>
           )}
         </article>
       </section>
@@ -179,7 +181,9 @@ export default function DashboardClient() {
             uploadDocument(file);
           }}
         />
-        <p className="muted small">Every upload becomes a private draft linked to your account.</p>
+        <p className="muted small">
+          Upload a PDF to start editing. Your changes are autosaved as a private draft in your account.
+        </p>
         {error ? <p className="error-text">{error}</p> : null}
       </section>
 
@@ -205,7 +209,7 @@ export default function DashboardClient() {
             </article>
           ))
         ) : (
-          <p className="muted">No documents yet. Upload your first PDF to begin.</p>
+          <p className="muted">No PDFs yet. Upload your first PDF and start editing.</p>
         )}
       </section>
     </main>
