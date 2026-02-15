@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
@@ -16,11 +16,10 @@ function GoogleLogo() {
   );
 }
 
-export default function AuthForm({ mode }) {
+export default function AuthForm({ mode, nextPath = '/app' }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const next = searchParams.get('next') || '/app';
+  const next = nextPath || '/app';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
