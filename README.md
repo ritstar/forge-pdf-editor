@@ -1,6 +1,6 @@
 # Forge PDF Editor
 
-Forge PDF Editor is now a full Supabase-backed PDF workspace with user accounts, Google login, saved signatures, and persistent document drafts.
+Forge PDF Editor is a Supabase-backed PDF workspace with user accounts, Google login, saved signatures, fill-and-sign support, and persistent drafts.
 
 ## Live App
 
@@ -11,9 +11,14 @@ Forge PDF Editor is now a full Supabase-backed PDF workspace with user accounts,
 - Landing page + auth flow (`/`, `/login`, `/signup`)
 - Email/password auth and Google OAuth
 - User-scoped dashboard for uploaded PDFs
-- Draft autosave per document
+- Draft autosave per document (manual save also available)
+- Delete draft documents from dashboard (with storage cleanup)
 - Signature library per user (save once, reuse anytime)
 - Multi-page PDF editing with text, image, and signature overlays
+- Fill & Sign panel:
+  - Detect and fill interactive PDF fields (text, checkbox, radio, dropdown/list)
+  - Quick actions for date and initials
+  - Quick Fill fallback for non-interactive PDFs (Name/Address/Email/Mobile/Date/Initials)
 - Export edited PDF and current page image formats
 
 ## Tech Stack
@@ -72,12 +77,12 @@ The app expects these private buckets:
 - `draft_assets`
 - `signatures`
 
-The SQL migration also adds RLS storage policies that scope access to each user's folder prefix.
+The SQL migration adds RLS storage policies scoped to each user's folder prefix.
 
 ## Draft Model
 
 Each document has one latest draft row in `document_drafts` keyed by `document_id`.
-The editor autosaves after changes and also supports manual save.
+Draft snapshot includes editor overlays plus form fill values.
 
 ## Notes
 
