@@ -3,8 +3,20 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { FilePlus2, FileText, LogOut, PenTool, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  CheckCircle2,
+  FilePlus2,
+  FileText,
+  LogOut,
+  Moon,
+  PenTool,
+  RefreshCw,
+  Sparkles,
+  Sun,
+  Trash2,
+} from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import ForgeLogo from './ForgeLogo';
 
 function sanitizeName(name) {
   return name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
@@ -20,7 +32,19 @@ export default function DashboardClient() {
   const [uploading, setUploading] = useState(false);
   const [deletingDocId, setDeletingDocId] = useState('');
   const [pendingDeleteDoc, setPendingDeleteDoc] = useState(null);
+  const [theme, setTheme] = useState(() => {
+    if (typeof document === 'undefined') return 'light';
+    return document.documentElement.getAttribute('data-theme') || 'light';
+  });
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.documentElement.setAttribute('data-theme', theme);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('forge-theme', theme);
+    }
+  }, [theme]);
 
   useEffect(() => {
     let mounted = true;
@@ -163,12 +187,34 @@ export default function DashboardClient() {
     user?.email?.split('@')[0] ||
     'there';
   const latestDoc = documents[0] || null;
+  const activeThisWeek = documents.filter((doc) => {
+    const updatedAt = new Date(doc.updated_at).getTime();
+    return Date.now() - updatedAt < 7 * 24 * 60 * 60 * 1000;
+  }).length;
   const draftCount = documents.filter((doc) => (doc.status || '').toLowerCase() === 'draft').length;
+  const checklist = [
+    {
+      id: 'upload',
+      label: 'Upload your first PDF',
+      done: documents.length > 0,
+    },
+    {
+      id: 'draft',
+      label: 'Create at least one draft',
+      done: draftCount > 0,
+    },
+    {
+      id: 'return',
+      label: 'Return and resume a draft',
+      done: documents.length > 1 || activeThisWeek > 0,
+    },
+  ];
 
   return (
     <main className="dashboard-page">
       <header className="dashboard-header">
         <div>
+          <ForgeLogo href="/app" className="dashboard-logo" />
           <p className="eyebrow">Workspace</p>
           <h1>Hi {displayName}</h1>
           <p className="muted">
@@ -176,6 +222,14 @@ export default function DashboardClient() {
           </p>
         </div>
         <div className="header-actions">
+          <button
+            className="ghost-btn"
+            type="button"
+            onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
           <button className="ghost-btn" onClick={() => router.refresh()}>
             <RefreshCw size={16} /> Refresh
           </button>
@@ -195,6 +249,10 @@ export default function DashboardClient() {
           <h3>{draftCount}</h3>
         </article>
         <article className="stat-card">
+          <p className="muted small">Active this week</p>
+          <h3>{activeThisWeek}</h3>
+        </article>
+        <article className="stat-card">
           <p className="muted small">Continue editing</p>
           {latestDoc ? (
             <Link href={`/editor/${latestDoc.id}`} className="ghost-btn">
@@ -203,6 +261,36 @@ export default function DashboardClient() {
           ) : (
             <p className="muted small">No PDF draft yet</p>
           )}
+        </article>
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="dashboard-panel">
+          <h2>
+            <Sparkles size={18} /> What You Can Do
+          </h2>
+          <div className="capability-list">
+            <span className="capability-chip">Fill & Sign forms</span>
+            <span className="capability-chip">Quick Fill for non-form PDFs</span>
+            <span className="capability-chip">Saved signatures per user</span>
+            <span className="capability-chip">Autosaved drafts</span>
+            <span className="capability-chip">Export PDF / PNG / JPG</span>
+            <span className="capability-chip">Drag, resize, duplicate layers</span>
+          </div>
+        </article>
+
+        <article className="dashboard-panel">
+          <h2>
+            <CheckCircle2 size={18} /> Getting Started
+          </h2>
+          <ul className="checklist">
+            {checklist.map((item) => (
+              <li key={item.id} className={item.done ? 'done' : ''}>
+                <CheckCircle2 size={16} />
+                <span>{item.label}</span>
+              </li>
+            ))}
+          </ul>
         </article>
       </section>
 
@@ -229,6 +317,10 @@ export default function DashboardClient() {
       </section>
 
       <section className="docs-grid">
+        <div className="docs-header">
+          <h2>Recent Documents</h2>
+          <p className="muted small">Open, continue, or delete drafts from here.</p>
+        </div>
         {loading ? (
           <p className="muted">Loading documents...</p>
         ) : documents.length ? (

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import ForgeLogo from './ForgeLogo';
 
 function GoogleLogo() {
   return (
@@ -91,6 +92,7 @@ export default function AuthForm({ mode, nextPath = '/app' }) {
   return (
     <main className="auth-page">
       <section className="auth-card">
+        <ForgeLogo href="/" />
         <h1>{isSignup ? 'Create account' : 'Welcome back'}</h1>
         <p className="muted">{isSignup ? 'Start saving drafts and signatures to your workspace.' : 'Sign in to continue editing your PDFs.'}</p>
 
