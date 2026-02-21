@@ -403,6 +403,37 @@ button:disabled,
   font-size: 0.78rem;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 24, 34, 0.45);
+  backdrop-filter: blur(2px);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  z-index: 1000;
+}
+
+.confirm-modal {
+  width: min(460px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.confirm-modal h3 {
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.confirm-modal p {
+  margin: 0;
+}
+
 /* Editor */
 .app-shell {
   width: min(1520px, 100%);
@@ -552,6 +583,40 @@ button:disabled,
 .signature-list {
   display: grid;
   gap: 8px;
+}
+
+.form-field-list {
+  display: grid;
+  gap: 10px;
+  max-height: 340px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.form-field-row {
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.quick-fill-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.quick-fill-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.checkbox-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .signature-row {

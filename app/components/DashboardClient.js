@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { FilePlus2, FileText, LogOut, PenTool, RefreshCw } from 'lucide-react';
+import { FilePlus2, FileText, LogOut, PenTool, RefreshCw, Trash2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 
 function sanitizeName(name) {
@@ -18,6 +18,8 @@ export default function DashboardClient() {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [deletingDocId, setDeletingDocId] = useState('');
+  const [pendingDeleteDoc, setPendingDeleteDoc] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -38,7 +40,7 @@ export default function DashboardClient() {
 
       const { data, error: docsError } = await supabase
         .from('documents')
-        .select('id, title, status, updated_at, created_at')
+        .select('id, title, status, updated_at, created_at, file_path')
         .order('updated_at', { ascending: false });
 
       if (!mounted) return;
@@ -114,6 +116,45 @@ export default function DashboardClient() {
     await supabase.auth.signOut();
     router.push('/');
     router.refresh();
+  };
+
+  const removeDraftAssets = async (ownerId, docId) => {
+    const prefix = `${ownerId}/${docId}`;
+    const { data: files, error: listError } = await supabase.storage.from('draft_assets').list(prefix, {
+      limit: 1000,
+    });
+    if (listError || !files?.length) return;
+
+    const paths = files.map((file) => `${prefix}/${file.name}`);
+    await supabase.storage.from('draft_assets').remove(paths);
+  };
+
+  const handleDeleteDocument = async (doc) => {
+    if (!user?.id) {
+      setError('Missing user session. Please sign in again.');
+      return;
+    }
+
+    setError('');
+    setDeletingDocId(doc.id);
+
+    try {
+      if (doc.file_path) {
+        await supabase.storage.from('documents').remove([doc.file_path]);
+      }
+
+      await removeDraftAssets(user.id, doc.id);
+
+      const { error: deleteError } = await supabase.from('documents').delete().eq('id', doc.id);
+      if (deleteError) throw deleteError;
+
+      setDocuments((prev) => prev.filter((item) => item.id !== doc.id));
+      setPendingDeleteDoc(null);
+    } catch (deleteError) {
+      setError(deleteError.message || 'Failed to delete draft.');
+    } finally {
+      setDeletingDocId('');
+    }
   };
 
   const displayName =
@@ -205,6 +246,14 @@ export default function DashboardClient() {
                 <Link href={`/editor/${doc.id}`} className="action-btn">
                   <PenTool size={16} /> Open Editor
                 </Link>
+                <button
+                  type="button"
+                  className="danger-btn"
+                  onClick={() => setPendingDeleteDoc(doc)}
+                  disabled={deletingDocId === doc.id}
+                >
+                  <Trash2 size={16} /> {deletingDocId === doc.id ? 'Deleting...' : 'Delete'}
+                </button>
               </div>
             </article>
           ))
@@ -212,6 +261,41 @@ export default function DashboardClient() {
           <p className="muted">No PDFs yet. Upload your first PDF and start editing.</p>
         )}
       </section>
+
+      {pendingDeleteDoc ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setPendingDeleteDoc(null)}>
+          <section
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-draft-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 id="delete-draft-title">Delete Draft?</h3>
+            <p className="muted">
+              This will permanently remove <strong>{pendingDeleteDoc.title}</strong> and all associated draft data.
+            </p>
+            <div className="stack">
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => setPendingDeleteDoc(null)}
+                disabled={deletingDocId === pendingDeleteDoc.id}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="danger-btn"
+                onClick={() => handleDeleteDocument(pendingDeleteDoc)}
+                disabled={deletingDocId === pendingDeleteDoc.id}
+              >
+                <Trash2 size={16} /> {deletingDocId === pendingDeleteDoc.id ? 'Deleting...' : 'Delete Draft'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

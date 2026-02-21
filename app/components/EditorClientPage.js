@@ -277,6 +277,7 @@ export default function EditorClientPage({ documentId }) {
   return (
     <ForgeEditor
       userEmail={user?.email || ''}
+      userName={user?.user_metadata?.full_name || user?.user_metadata?.name || ''}
       documentTitle={documentRow.title}
       initialPdfFile={initialPdfFile}
       initialDraft={initialDraft}

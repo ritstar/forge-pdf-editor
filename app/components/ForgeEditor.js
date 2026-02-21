@@ -23,6 +23,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import { convertPdfToImage } from '../utils/pdfToImage';
 import { removeWhiteBackground } from '../utils/imageProcessing';
 import { generatePdf } from '../utils/pdfGenerator';
+import { extractFormFieldsFromPdfBytes, getInitialsFromName } from '../utils/pdfForms';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
@@ -48,6 +49,7 @@ function createTextElement(pageIndex) {
     fontSize: 0.03,
     color: '#111827',
     bold: false,
+    quickFillKey: null,
   };
 }
 
@@ -90,6 +92,7 @@ function hydrateElements(serialized = []) {
           fontSize: item.fontSize ?? 0.03,
           color: item.color || '#111827',
           bold: Boolean(item.bold),
+          quickFillKey: item.quickFillKey || null,
         };
       }
 
@@ -133,6 +136,7 @@ function serializeElements(elements = []) {
         fontSize: item.fontSize,
         color: item.color,
         bold: Boolean(item.bold),
+        quickFillKey: item.quickFillKey || null,
       };
     }
 
@@ -156,6 +160,7 @@ function serializeElements(elements = []) {
 
 export default function ForgeEditor({
   userEmail,
+  userName,
   documentTitle,
   initialPdfFile,
   initialDraft,
@@ -183,6 +188,15 @@ export default function ForgeEditor({
   const [saveStatus, setSaveStatus] = useState('saved');
   const [saveError, setSaveError] = useState('');
   const [signatureName, setSignatureName] = useState('');
+  const [formFields, setFormFields] = useState([]);
+  const [formValues, setFormValues] = useState(() => initialDraft?.formValues || {});
+  const [formLoading, setFormLoading] = useState(false);
+  const [quickFill, setQuickFill] = useState(() => ({
+    name: userName || '',
+    address: '',
+    email: userEmail || '',
+    mobile: '',
+  }));
 
   const imageInputRef = useRef(null);
   const signatureInputRef = useRef(null);
@@ -197,15 +211,69 @@ export default function ForgeEditor({
     setPdfFile(initialPdfFile || null);
   }, [initialPdfFile]);
 
+  useEffect(() => {
+    setQuickFill((prev) => ({
+      ...prev,
+      name: prev.name || userName || '',
+      email: prev.email || userEmail || '',
+    }));
+  }, [userEmail, userName]);
+
   const selectedElement = useMemo(
     () => elements.find((item) => item.id === selectedId) ?? null,
     [elements, selectedId],
+  );
+  const initialsValue = useMemo(
+    () => getInitialsFromName(userName || userEmail),
+    [userEmail, userName],
   );
 
   const pageElements = useMemo(
     () => elements.filter((item) => item.pageIndex === currentPage - 1),
     [elements, currentPage],
   );
+
+  useEffect(() => {
+    setFormValues(initialDraft?.formValues || {});
+  }, [initialDraft]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadFormFields = async () => {
+      if (!pdfFile) {
+        setFormFields([]);
+        return;
+      }
+
+      setFormLoading(true);
+      try {
+        const pdfBytes = await pdfFile.arrayBuffer();
+        const detected = await extractFormFieldsFromPdfBytes(pdfBytes);
+        if (!active) return;
+
+        setFormFields(detected);
+        setFormValues((prev) => {
+          const next = { ...prev };
+          for (const field of detected) {
+            if (!(field.name in next)) {
+              next[field.name] = field.value;
+            }
+          }
+          return next;
+        });
+      } catch {
+        if (active) setFormFields([]);
+      } finally {
+        if (active) setFormLoading(false);
+      }
+    };
+
+    loadFormFields();
+    return () => {
+      active = false;
+    };
+  }, [pdfFile]);
 
   const trackHistory = useCallback((snapshot) => {
     setHistory((prev) => [...prev.slice(-59), snapshot]);
@@ -382,6 +450,7 @@ export default function ForgeEditor({
       currentPage,
       zoom,
       elements: serializeElements(elements),
+      formValues,
     };
     const payload = JSON.stringify(snapshot);
 
@@ -401,7 +470,7 @@ export default function ForgeEditor({
       setSaveStatus('error');
       setSaveError(error.message || 'Failed to save draft.');
     }
-  }, [currentPage, elements, onSaveDraft, pdfFile, zoom]);
+  }, [currentPage, elements, formValues, onSaveDraft, pdfFile, zoom]);
 
   useEffect(() => {
     if (!initializedRef.current) {
@@ -421,7 +490,7 @@ export default function ForgeEditor({
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [elements, currentPage, zoom, saveDraftNow]);
+  }, [elements, currentPage, zoom, formValues, saveDraftNow]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -464,6 +533,62 @@ export default function ForgeEditor({
   const updateSelected = (updates) => {
     if (!selectedId) return;
     applyChange((prev) => prev.map((item) => (item.id === selectedId ? { ...item, ...updates } : item)));
+  };
+
+  const updateFormValue = (name, value) => {
+    setFormValues((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const insertQuickFillText = (value, options = {}) => {
+    const text = String(value || '').trim();
+    if (!text) return;
+    const quickFillKey = options.key || null;
+
+    if (quickFillKey) {
+      const existing = elements.find(
+        (item) =>
+          item.type === 'text' &&
+          item.pageIndex === currentPage - 1 &&
+          item.quickFillKey === quickFillKey,
+      );
+
+      if (existing) {
+        applyChange((prev) =>
+          prev.map((item) => (item.id === existing.id ? { ...item, text } : item)),
+        );
+        setSelectedId(existing.id);
+        setEditingId(existing.id);
+        return;
+      }
+    }
+
+    const pageItemCount = elements.filter((item) => item.pageIndex === currentPage - 1).length;
+    const y = clamp(0.12 + pageItemCount * 0.045, 0.08, 0.9);
+
+    const item = {
+      ...createTextElement(currentPage - 1),
+      text,
+      x: options.x ?? 0.12,
+      y: options.y ?? y,
+      width: options.width ?? 0.36,
+      height: options.height ?? 0.07,
+      fontSize: options.fontSize ?? 0.026,
+      quickFillKey,
+    };
+    applyChange((prev) => [...prev, item]);
+    setSelectedId(item.id);
+    setEditingId(item.id);
+  };
+
+  const applyQuickFormValue = (name, kind) => {
+    if (kind === 'date') {
+      const dateValue = new Date().toLocaleDateString();
+      updateFormValue(name, dateValue);
+      return;
+    }
+    if (kind === 'initials') {
+      updateFormValue(name, initialsValue);
+    }
   };
 
   const removeSelected = () => {
@@ -607,7 +732,7 @@ export default function ForgeEditor({
     setBusy(true);
     try {
       const pdfBytes = await pdfFile.arrayBuffer();
-      const modified = await generatePdf({ pdfBytes, elements });
+      const modified = await generatePdf({ pdfBytes, elements, formValues });
       const blob = new Blob([modified], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -625,7 +750,7 @@ export default function ForgeEditor({
     setBusy(true);
     try {
       const pdfBytes = await pdfFile.arrayBuffer();
-      const modified = await generatePdf({ pdfBytes, elements });
+      const modified = await generatePdf({ pdfBytes, elements, formValues });
       const dataUrl = await convertPdfToImage(modified, currentPage, format);
       const link = document.createElement('a');
       link.href = dataUrl;
@@ -956,6 +1081,180 @@ export default function ForgeEditor({
                     <button className="danger-btn" onClick={removeSelected}>Delete</button>
                   </div>
                 </>
+              )}
+            </div>
+
+            <div className="panel-section">
+              <h4>Fill &amp; Sign Fields</h4>
+              {formLoading ? (
+                <p className="muted">Detecting fillable fields...</p>
+              ) : formFields.length ? (
+                <div className="form-field-list">
+                  {formFields.map((field) => {
+                    const value = formValues[field.name];
+                    const controlId = `form-field-${field.name.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+
+                    if (field.type === 'checkbox') {
+                      return (
+                        <label key={field.name} className="form-field-row checkbox-row" htmlFor={controlId}>
+                          <input
+                            id={controlId}
+                            type="checkbox"
+                            checked={Boolean(value)}
+                            onChange={(event) => updateFormValue(field.name, event.target.checked)}
+                          />
+                          <span>{field.label}</span>
+                        </label>
+                      );
+                    }
+
+                    if (field.type === 'radio' || field.type === 'dropdown' || field.type === 'list') {
+                      return (
+                        <div key={field.name} className="form-field-row">
+                          <label className="field-label" htmlFor={controlId}>{field.label}</label>
+                          <select
+                            id={controlId}
+                            className="field"
+                            value={value ?? ''}
+                            onChange={(event) => updateFormValue(field.name, event.target.value)}
+                          >
+                            <option value="">Select...</option>
+                            {(field.options || []).map((option) => (
+                              <option key={`${field.name}-${option}`} value={option}>{option}</option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div key={field.name} className="form-field-row">
+                        <label className="field-label" htmlFor={controlId}>{field.label}</label>
+                        <input
+                          id={controlId}
+                          type="text"
+                          className="field"
+                          value={value ?? ''}
+                          onChange={(event) => updateFormValue(field.name, event.target.value)}
+                        />
+                        <div className="stack">
+                          <button
+                            type="button"
+                            className="ghost-btn"
+                            onClick={() => applyQuickFormValue(field.name, 'date')}
+                          >
+                            Insert Date
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-btn"
+                            onClick={() => applyQuickFormValue(field.name, 'initials')}
+                            disabled={!initialsValue}
+                          >
+                            Insert Initials
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="quick-fill-panel">
+                  <p className="muted">
+                    No interactive form fields were detected. Use Quick Fill to insert text on this page.
+                  </p>
+                  <label className="field-label" htmlFor="quick-fill-name">Name</label>
+                  <div className="quick-fill-row">
+                    <input
+                      id="quick-fill-name"
+                      className="field"
+                      value={quickFill.name}
+                      onChange={(event) => setQuickFill((prev) => ({ ...prev, name: event.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => insertQuickFillText(quickFill.name, { key: 'quickfill-name' })}
+                    >
+                      Insert
+                    </button>
+                  </div>
+
+                  <label className="field-label" htmlFor="quick-fill-address">Address</label>
+                  <div className="quick-fill-row">
+                    <input
+                      id="quick-fill-address"
+                      className="field"
+                      value={quickFill.address}
+                      onChange={(event) => setQuickFill((prev) => ({ ...prev, address: event.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() =>
+                        insertQuickFillText(quickFill.address, { key: 'quickfill-address', width: 0.48 })
+                      }
+                    >
+                      Insert
+                    </button>
+                  </div>
+
+                  <label className="field-label" htmlFor="quick-fill-email">Email</label>
+                  <div className="quick-fill-row">
+                    <input
+                      id="quick-fill-email"
+                      className="field"
+                      value={quickFill.email}
+                      onChange={(event) => setQuickFill((prev) => ({ ...prev, email: event.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() =>
+                        insertQuickFillText(quickFill.email, { key: 'quickfill-email', width: 0.44 })
+                      }
+                    >
+                      Insert
+                    </button>
+                  </div>
+
+                  <label className="field-label" htmlFor="quick-fill-mobile">Mobile</label>
+                  <div className="quick-fill-row">
+                    <input
+                      id="quick-fill-mobile"
+                      className="field"
+                      value={quickFill.mobile}
+                      onChange={(event) => setQuickFill((prev) => ({ ...prev, mobile: event.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => insertQuickFillText(quickFill.mobile, { key: 'quickfill-mobile' })}
+                    >
+                      Insert
+                    </button>
+                  </div>
+
+                  <div className="stack">
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() =>
+                        insertQuickFillText(new Date().toLocaleDateString(), { key: 'quickfill-date' })
+                      }
+                    >
+                      Insert Date
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => insertQuickFillText(initialsValue, { key: 'quickfill-initials' })}
+                      disabled={!initialsValue}
+                    >
+                      Insert Initials
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
 

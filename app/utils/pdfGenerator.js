@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
+import { applyFormValuesToPdfDoc } from './pdfForms';
 
 function hexToRgb(hex) {
   const normalized = hex.replace('#', '');
@@ -50,8 +51,9 @@ async function embedImage(pdfDoc, element) {
   }
 }
 
-export async function generatePdf({ pdfBytes, elements = [] }) {
+export async function generatePdf({ pdfBytes, elements = [], formValues = {} }) {
   const pdfDoc = await PDFDocument.load(pdfBytes);
+  await applyFormValuesToPdfDoc(pdfDoc, formValues);
   const pages = pdfDoc.getPages();
   const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
