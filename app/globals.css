@@ -188,17 +188,31 @@ button {
   border: 1px solid var(--google-border);
   background: var(--google-bg);
   color: var(--google-text);
-  border-radius: 10px;
-  min-height: 40px;
+  border-radius: 12px;
+  min-height: 42px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  font-weight: 600;
+  gap: 8px;
+  font-weight: 500;
+  font-size: 0.94rem;
+  padding: 0 14px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12);
 }
 
 .google-btn:hover {
   background: var(--google-hover);
+}
+
+.google-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, white);
+  outline-offset: 2px;
+}
+
+.google-svg {
+  width: 1.35rem;
+  height: 1.35rem;
+  flex-shrink: 0;
 }
 
 .danger-btn {
