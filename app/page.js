@@ -31,11 +31,14 @@ export default function LandingPage() {
         <div className="landing-nav-actions">
           <button
             type="button"
-            className="ghost-btn"
+            className="ghost-btn theme-toggle"
             onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            <span className="theme-toggle-label">
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </span>
           </button>
           <Link href="/login" className="ghost-btn">Login</Link>
           <Link href="/signup" className="primary-btn">Sign up</Link>

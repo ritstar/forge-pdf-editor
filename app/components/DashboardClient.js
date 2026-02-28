@@ -223,12 +223,15 @@ export default function DashboardClient() {
         </div>
         <div className="header-actions">
           <button
-            className="ghost-btn"
+            className="ghost-btn theme-toggle"
             type="button"
             onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            <span className="theme-toggle-label">
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </span>
           </button>
           <button className="ghost-btn" onClick={() => router.refresh()}>
             <RefreshCw size={16} /> Refresh

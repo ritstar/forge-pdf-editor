@@ -184,6 +184,10 @@ button {
   background: var(--ghost-hover);
 }
 
+.theme-toggle {
+  white-space: nowrap;
+}
+
 .google-btn {
   border: 1px solid var(--google-border);
   background: var(--google-bg);
@@ -1078,6 +1082,17 @@ select {
 
   .stats-grid {
     grid-template-columns: 1fr;
+  }
+
+  .theme-toggle {
+    min-height: 34px;
+    width: 34px;
+    padding: 0;
+    gap: 0;
+  }
+
+  .theme-toggle-label {
+    display: none;
   }
 
   .signature-row {
