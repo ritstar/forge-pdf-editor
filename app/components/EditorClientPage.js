@@ -2,22 +2,37 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
-import ForgeEditor from './ForgeEditor';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  addDoc,
+  deleteDoc as firestoreDeleteDoc,
+  collection,
+  query,
+  where,
+  orderBy,
+  getDocs,
+} from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase/config';
+import dynamic from 'next/dynamic';
+
+const ForgeEditor = dynamic(() => import('./ForgeEditor'), {
+  ssr: false,
+  loading: () => (
+    <main className="dashboard-page">
+      <p className="muted">Loading editor interface...</p>
+    </main>
+  ),
+});
 
 function sanitizeName(name) {
   return name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
 }
 
-async function signedUrl(supabase, bucket, path, expiresIn = 60 * 60) {
-  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, expiresIn);
-  if (error) return null;
-  return data.signedUrl;
-}
-
 export default function EditorClientPage({ documentId }) {
   const router = useRouter();
-  const supabase = useMemo(() => createClient(), []);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -26,11 +41,10 @@ export default function EditorClientPage({ documentId }) {
   const [initialPdfFile, setInitialPdfFile] = useState(null);
   const [initialDraft, setInitialDraft] = useState(null);
   const [signatures, setSignatures] = useState([]);
-  const isValidDocumentId =
-    typeof documentId === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(documentId);
 
-  const loadData = useCallback(async () => {
+  const isValidDocumentId = typeof documentId === 'string' && documentId.length > 0;
+
+  const loadData = useCallback(async (activeUser) => {
     if (!isValidDocumentId) {
       setError('Invalid document id. Please return to dashboard and reopen the document.');
       setLoading(false);
@@ -40,28 +54,19 @@ export default function EditorClientPage({ documentId }) {
     setLoading(true);
     setError('');
 
-    const {
-      data: { user: activeUser },
-    } = await supabase.auth.getUser();
+    // Fetch document from Firestore
+    const docSnap = await getDoc(doc(db, 'documents', documentId));
 
-    if (!activeUser) {
-      router.replace('/login');
-      return;
-    }
-
-    const { data: doc, error: docError } = await supabase
-      .from('documents')
-      .select('*')
-      .eq('id', documentId)
-      .single();
-
-    if (docError || !doc) {
-      setError(docError?.message || 'Document not found');
+    if (!docSnap.exists()) {
+      setError('Document not found');
       setLoading(false);
       return;
     }
 
-    const pdfUrl = await signedUrl(supabase, 'documents', doc.file_path, 60 * 30);
+    const docData = { id: docSnap.id, ...docSnap.data() };
+
+    // Get PDF download URL from Vercel Blob (saved directly in file_path)
+    const pdfUrl = docData.file_path;
     if (!pdfUrl) {
       setError('Could not access the source PDF.');
       setLoading(false);
@@ -76,187 +81,171 @@ export default function EditorClientPage({ documentId }) {
     }
 
     const pdfBlob = await pdfResponse.blob();
-    const pdfFile = new File([pdfBlob], doc.title || 'document.pdf', {
-      type: doc.mime_type || 'application/pdf',
+    const pdfFile = new File([pdfBlob], docData.title || 'document.pdf', {
+      type: docData.mime_type || 'application/pdf',
     });
 
-    const { data: draftRow } = await supabase
-      .from('document_drafts')
-      .select('editor_state, updated_at')
-      .eq('document_id', documentId)
-      .maybeSingle();
-
-    const rawDraft = draftRow?.editor_state || null;
+    // Fetch draft from Firestore subcollection
+    const draftSnap = await getDoc(doc(db, 'documents', documentId, 'drafts', 'current'));
+    const rawDraft = draftSnap.exists() ? draftSnap.data().editor_state || null : null;
     const draftElements = Array.isArray(rawDraft?.elements) ? rawDraft.elements : [];
 
-    const assetPaths = [...new Set(
-      draftElements
-        .filter((item) => item.type === 'image' && item.storagePath && item.assetBucket)
-        .map((item) => `${item.assetBucket}::${item.storagePath}`),
-    )];
-
-    const urlMap = new Map();
-    await Promise.all(
-      assetPaths.map(async (key) => {
-        const [bucket, path] = key.split('::');
-        const url = await signedUrl(supabase, bucket, path, 60 * 60 * 24);
-        if (url) urlMap.set(key, url);
-      }),
-    );
-
+    // Hydrate draft elements (URLs are already public Vercel Blob URLs, so no mapping needed)
     const hydratedDraft = rawDraft
       ? {
-          ...rawDraft,
-          elements: draftElements.map((item) => {
-            if (item.type !== 'image') return item;
-            const key = item.storagePath && item.assetBucket ? `${item.assetBucket}::${item.storagePath}` : '';
-            return {
-              ...item,
-              url: key ? urlMap.get(key) || item.url : item.url,
-            };
-          }),
-        }
+        ...rawDraft,
+        elements: draftElements.map((item) => {
+          if (item.type !== 'image') return item;
+          return {
+            ...item,
+            url: item.storagePath || item.url, // Fallback for backward compatibility
+          };
+        }),
+      }
       : null;
 
-    const { data: sigRows, error: sigError } = await supabase
-      .from('signatures')
-      .select('*')
-      .order('updated_at', { ascending: false });
-
-    if (sigError) {
-      setError(sigError.message);
-      setLoading(false);
-      return;
-    }
-
-    const enrichedSignatures = await Promise.all(
-      (sigRows || []).map(async (sig) => ({
-        ...sig,
-        url: await signedUrl(supabase, 'signatures', sig.image_path, 60 * 60 * 24),
-      })),
+    // Fetch signatures
+    const sigQuery = query(
+      collection(db, 'signatures'),
+      where('user_id', '==', activeUser.uid),
+      orderBy('updated_at', 'desc'),
     );
+    const sigSnap = await getDocs(sigQuery);
+
+    const enrichedSignatures = sigSnap.docs.map((s) => {
+      const sigData = { id: s.id, ...s.data() };
+      return { ...sigData, url: sigData.image_path }; // image_path is now the direct URL
+    });
 
     setUser(activeUser);
-    setDocumentRow(doc);
+    setDocumentRow(docData);
     setInitialPdfFile(pdfFile);
     setInitialDraft(hydratedDraft);
     setSignatures(enrichedSignatures.filter((item) => Boolean(item.url)));
     setLoading(false);
-  }, [documentId, isValidDocumentId, router, supabase]);
+  }, [documentId, isValidDocumentId]);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData();
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [loadData]);
+    const unsubscribe = onAuthStateChanged(auth, (activeUser) => {
+      if (!activeUser) {
+        router.replace('/login');
+        return;
+      }
+      loadData(activeUser);
+    });
+
+    return () => unsubscribe();
+  }, [loadData, router]);
 
   const handleSaveDraft = useCallback(
     async (snapshot) => {
       if (!user) return;
-      const payload = {
+      await setDoc(doc(db, 'documents', documentId, 'drafts', 'current'), {
         document_id: documentId,
-        user_id: user.id,
+        user_id: user.uid,
         editor_state: snapshot,
-      };
+        updated_at: new Date().toISOString(),
+      });
 
-      const { error: saveError } = await supabase
-        .from('document_drafts')
-        .upsert(payload, { onConflict: 'document_id' });
-
-      if (saveError) {
-        throw saveError;
-      }
-
-      await supabase
-        .from('documents')
-        .update({ status: 'draft', updated_at: new Date().toISOString() })
-        .eq('id', documentId);
+      // Update parent document timestamp
+      await setDoc(doc(db, 'documents', documentId), {
+        status: 'draft',
+        updated_at: new Date().toISOString(),
+      }, { merge: true });
     },
-    [documentId, supabase, user],
+    [documentId, user],
   );
 
   const handleUploadOverlay = useCallback(
     async (file) => {
       if (!user) throw new Error('No active user');
 
-      const storagePath = `${user.id}/${documentId}/${crypto.randomUUID()}-${sanitizeName(file.name)}`;
+      const storagePath = `draft_assets/${user.uid}/${documentId}/${crypto.randomUUID()}-${sanitizeName(file.name)}`;
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('path', storagePath);
 
-      const { error: uploadError } = await supabase.storage.from('draft_assets').upload(storagePath, file, {
-        contentType: file.type || 'image/png',
-        upsert: false,
+      const res = await fetch('/api/blob/upload', {
+        method: 'POST',
+        body: formData,
       });
 
-      if (uploadError) {
-        throw uploadError;
-      }
-
-      const url = await signedUrl(supabase, 'draft_assets', storagePath, 60 * 60 * 24);
+      if (!res.ok) throw new Error('Failed to upload image');
+      const blob = await res.json();
 
       return {
         assetBucket: 'draft_assets',
-        storagePath,
-        url,
+        storagePath: blob.url,
+        url: blob.url,
         mimeType: file.type || 'image/png',
       };
     },
-    [documentId, supabase, user],
+    [documentId, user],
   );
 
   const handleCreateSignature = useCallback(
     async (file, label) => {
       if (!user) throw new Error('No active user');
 
-      const path = `${user.id}/${crypto.randomUUID()}-${sanitizeName(label || 'signature')}.png`;
+      const path = `signatures/${user.uid}/${crypto.randomUUID()}-${sanitizeName(label || 'signature')}.png`;
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('path', path);
 
-      const { error: uploadError } = await supabase.storage.from('signatures').upload(path, file, {
-        contentType: file.type || 'image/png',
-        upsert: false,
+      const res = await fetch('/api/blob/upload', {
+        method: 'POST',
+        body: formData,
       });
 
-      if (uploadError) {
-        throw uploadError;
-      }
+      if (!res.ok) throw new Error('Failed to upload signature');
+      const blob = await res.json();
 
-      const { data: inserted, error: insertError } = await supabase
-        .from('signatures')
-        .insert({
-          user_id: user.id,
-          name: label || `Signature ${new Date().toLocaleDateString()}`,
-          image_path: path,
-          mime_type: file.type || 'image/png',
-        })
-        .select('*')
-        .single();
+      const sigDocRef = await addDoc(collection(db, 'signatures'), {
+        user_id: user.uid,
+        name: label || `Signature ${new Date().toLocaleDateString()}`,
+        image_path: blob.url,
+        mime_type: file.type || 'image/png',
+        is_default: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
-      if (insertError || !inserted) {
-        throw insertError || new Error('Failed to save signature row');
-      }
-
-      const url = await signedUrl(supabase, 'signatures', inserted.image_path, 60 * 60 * 24);
-      const next = { ...inserted, url };
-      setSignatures((prev) => [next, ...prev]);
-      return next;
+      const inserted = { id: sigDocRef.id, user_id: user.uid, name: label || `Signature ${new Date().toLocaleDateString()}`, image_path: blob.url, mime_type: file.type || 'image/png', url: blob.url };
+      setSignatures((prev) => [inserted, ...prev]);
+      return inserted;
     },
-    [supabase, user],
+    [user],
   );
 
   const handleDeleteSignature = useCallback(
     async (signature) => {
-      const { error: deleteRowError } = await supabase.from('signatures').delete().eq('id', signature.id);
-      if (deleteRowError) throw deleteRowError;
-
-      await supabase.storage.from('signatures').remove([signature.image_path]);
+      await firestoreDeleteDoc(doc(db, 'signatures', signature.id));
+      
+      if (signature.image_path && signature.image_path.includes('public.blob.vercel-storage.com')) {
+        try {
+          await fetch('/api/blob/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: signature.image_path }),
+          });
+        } catch (err) {
+          console.error('Failed to delete blob signature:', err);
+        }
+      }
+      
       setSignatures((prev) => prev.filter((item) => item.id !== signature.id));
     },
-    [supabase],
+    [],
   );
 
   const handleSignOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await signOut(auth);
+    await fetch('/api/session', { method: 'DELETE' });
     router.push('/');
     router.refresh();
-  }, [router, supabase]);
+  }, [router]);
 
   if (loading) {
     return (
@@ -277,7 +266,7 @@ export default function EditorClientPage({ documentId }) {
   return (
     <ForgeEditor
       userEmail={user?.email || ''}
-      userName={user?.user_metadata?.full_name || user?.user_metadata?.name || ''}
+      userName={user?.displayName || ''}
       documentTitle={documentRow.title}
       initialPdfFile={initialPdfFile}
       initialDraft={initialDraft}

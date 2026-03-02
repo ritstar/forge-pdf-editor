@@ -2,7 +2,7 @@ import './globals.css';
 
 export const metadata = {
   title: 'Forge PDF',
-  description: 'User-based PDF editor with Google login, saved signatures, and draft autosave powered by Supabase.',
+  description: 'User-based PDF editor with Google login, saved signatures, and draft autosave powered by Firebase.',
   icons: {
     icon: '/forge-mark.svg',
     shortcut: '/forge-mark.svg',

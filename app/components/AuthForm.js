@@ -2,9 +2,53 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
+import { useState } from 'react';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+  updateProfile,
+} from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase/config';
 import ForgeLogo from './ForgeLogo';
+
+const googleProvider = new GoogleAuthProvider();
+
+async function createSessionCookie(user) {
+  const idToken = await user.getIdToken();
+  const res = await fetch('/api/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to create session');
+  }
+}
+
+async function ensureProfile(user) {
+  try {
+    const profileRef = doc(db, 'profiles', user.uid);
+    const snap = await getDoc(profileRef);
+    if (!snap.exists()) {
+      await setDoc(profileRef, {
+        email: user.email || '',
+        full_name: user.displayName || '',
+        avatar_url: user.photoURL || '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    console.error('Error ensuring profile:', err);
+    // We don't necessarily want to block login if profile creation fails,
+    // but in this app the dashboard depends on it.
+    throw new Error('Failed to sync user profile. Check Firestore rules.');
+  }
+}
 
 function GoogleLogo() {
   return (
@@ -37,7 +81,6 @@ function GoogleLogo() {
 }
 
 export default function AuthForm({ mode, nextPath = '/app' }) {
-  const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
   const next = nextPath || '/app';
 
@@ -53,16 +96,14 @@ export default function AuthForm({ mode, nextPath = '/app' }) {
   const handleGoogle = async () => {
     setLoading(true);
     setError('');
-    const origin = window.location.origin;
-    const { error: oauthError } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
-      },
-    });
-
-    if (oauthError) {
-      setError(oauthError.message);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      await ensureProfile(result.user);
+      await createSessionCookie(result.user);
+      router.push(next);
+      router.refresh();
+    } catch (err) {
+      setError(err.message || 'Google sign-in failed');
       setLoading(false);
     }
   };
@@ -73,39 +114,27 @@ export default function AuthForm({ mode, nextPath = '/app' }) {
     setError('');
     setMessage('');
 
-    if (isSignup) {
-      const { error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
-          data: {
-            full_name: name,
-          },
-        },
-      });
-
-      if (signUpError) {
-        setError(signUpError.message);
-      } else {
-        setMessage('Account created. Check your email for verification link if required.');
+    try {
+      if (isSignup) {
+        const { user } = await createUserWithEmailAndPassword(auth, email, password);
+        await updateProfile(user, { displayName: name });
+        await ensureProfile(user);
+        await createSessionCookie(user);
+        setMessage('Account created successfully.');
         router.push('/app');
         router.refresh();
+        return;
       }
+
+      const { user } = await signInWithEmailAndPassword(auth, email, password);
+      await createSessionCookie(user);
+      router.push(next);
+      router.refresh();
+    } catch (err) {
+      setError(err.message || 'Authentication failed');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-
-    if (signInError) {
-      setError(signInError.message);
-      setLoading(false);
-      return;
-    }
-
-    router.push(next);
-    router.refresh();
   };
 
   return (

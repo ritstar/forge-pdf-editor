@@ -1,6 +1,6 @@
 # Forge PDF Editor
 
-Forge PDF Editor is a Supabase-backed PDF workspace with user accounts, Google login, saved signatures, fill-and-sign support, and persistent drafts.
+Forge PDF Editor is a Firebase-backed PDF workspace with user accounts, Google login, saved signatures, fill-and-sign support, and persistent drafts.
 
 ## Live App
 
@@ -9,7 +9,7 @@ Forge PDF Editor is a Supabase-backed PDF workspace with user accounts, Google l
 ## Core Features
 
 - Landing page + auth flow (`/`, `/login`, `/signup`)
-- Email/password auth and Google OAuth
+- Email/password auth and Google OAuth (via Firebase)
 - User-scoped dashboard for uploaded PDFs
 - Draft autosave per document (manual save also available)
 - Delete draft documents from dashboard (with storage cleanup)
@@ -18,14 +18,14 @@ Forge PDF Editor is a Supabase-backed PDF workspace with user accounts, Google l
 - Fill & Sign panel:
   - Detect and fill interactive PDF fields (text, checkbox, radio, dropdown/list)
   - Quick actions for date and initials
-  - Quick Fill fallback for non-interactive PDFs (Name/Address/Email/Mobile/Date/Initials)
 - Export edited PDF and current page image formats
 
 ## Tech Stack
 
 - Next.js 16 (App Router)
 - React 19
-- Supabase Auth + Database + Storage
+- Firebase Auth + Firestore
+- Vercel Blob (for fast, native Next.js object storage)
 - `react-pdf` + `pdfjs-dist`
 - `pdf-lib`
 
@@ -37,31 +37,39 @@ Forge PDF Editor is a Supabase-backed PDF workspace with user accounts, Google l
 npm install
 ```
 
-2. Create env file:
+2. Create `.env.local`:
 
 ```bash
-cp .env.example .env.local
-```
+# Firebase Client SDK
+NEXT_PUBLIC_FIREBASE_API_KEY=...
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
+NEXT_PUBLIC_FIREBASE_APP_ID=...
+NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=...
 
-3. Fill `.env.local`:
+# Firebase Admin SDK (Server-side)
+FIREBASE_ADMIN_PROJECT_ID=...
+FIREBASE_ADMIN_CLIENT_EMAIL=...
+FIREBASE_ADMIN_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 
-```bash
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+# Vercel Blob Token
+BLOB_READ_WRITE_TOKEN="..."
+
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-4. Run SQL migrations in Supabase SQL Editor:
+3. Create a Firebase Project in the [Firebase Console](https://console.firebase.google.com/).
 
-- `supabase/schema.sql`
+4. Enable Firebase Services:
+    - **Authentication**: Enable Email/Password and Google providers.
+    - **Firestore**: Create a database in "Production mode" and apply rules from `firestore.rules`.
 
-5. Configure Auth providers in Supabase:
-
-- Enable Email provider
-- Enable Google provider
-- Add redirect URLs:
-  - `http://localhost:3000/auth/callback`
-  - `https://forge-pdf-editor.vercel.app/auth/callback`
+5. Create a Vercel Blob store:
+    - Go to Vercel Dashboard > Storage > Create Database > Blob.
+    - Set Access to **Public**.
+    - Copy the `BLOB_READ_WRITE_TOKEN`.
 
 6. Start dev server:
 
@@ -69,26 +77,20 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 npm run dev
 ```
 
-## Supabase Storage Buckets
+## Firebase Rules
 
-The app expects these private buckets:
-
-- `documents`
-- `draft_assets`
-- `signatures`
-
-The SQL migration adds RLS storage policies scoped to each user's folder prefix.
+The app expects Firestore rules to be configured for user data protection.
+See `firestore.rules` in the root directory.
 
 ## Draft Model
 
-Each document has one latest draft row in `document_drafts` keyed by `document_id`.
+Each document has one latest draft row in the `drafts` subcollection of the document in Firestore.
 Draft snapshot includes editor overlays plus form fill values.
 
 ## Notes
 
 - All document and signature data is tied to authenticated users.
-- Do not use a service role key in client-side code.
-- If Google OAuth is enabled, ensure callback URL matches exactly in both Supabase and Google Cloud console.
+- Never expose Firebase Admin keys in client-side code.
 
 ## Scripts
 

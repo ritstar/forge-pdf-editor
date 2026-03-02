@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   CheckCircle2,
   FilePlus2,
@@ -11,12 +11,28 @@ import {
   Moon,
   PenTool,
   RefreshCw,
-  Sparkles,
   Sun,
   Trash2,
+  MoreVertical,
+  Activity
 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  limit,
+  getDocs,
+  addDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp,
+} from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase/config';
 import ForgeLogo from './ForgeLogo';
+import { TOOLS } from '@/lib/toolsData';
+import Footer from './Footer';
 
 function sanitizeName(name) {
   return name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
@@ -24,14 +40,16 @@ function sanitizeName(name) {
 
 export default function DashboardClient() {
   const router = useRouter();
-  const supabase = useMemo(() => createClient(), []);
 
   const [user, setUser] = useState(null);
   const [documents, setDocuments] = useState([]);
+  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [deletingDocId, setDeletingDocId] = useState('');
   const [pendingDeleteDoc, setPendingDeleteDoc] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const dropdownRef = useRef(null);
   const [theme, setTheme] = useState(() => {
     if (typeof document === 'undefined') return 'light';
     return document.documentElement.getAttribute('data-theme') || 'light';
@@ -46,51 +64,57 @@ export default function DashboardClient() {
     }
   }, [theme]);
 
+  // Click outside listener for dropdown
   useEffect(() => {
-    let mounted = true;
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setShowHistory(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-    const load = async () => {
-      setLoading(true);
-      setError('');
-
-      const {
-        data: { user: activeUser },
-      } = await supabase.auth.getUser();
-
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (activeUser) => {
       if (!activeUser) {
         router.replace('/login');
         return;
       }
 
-      const { data, error: docsError } = await supabase
-        .from('documents')
-        .select('id, title, status, updated_at, created_at, file_path')
-        .order('updated_at', { ascending: false });
-
-      if (!mounted) return;
-
       setUser(activeUser);
-      if (docsError) {
-        setError(docsError.message);
-      } else {
-        setDocuments(data ?? []);
+      setLoading(true);
+      setError('');
+
+      try {
+        const docsQuery = query(
+          collection(db, 'documents'),
+          where('user_id', '==', activeUser.uid),
+          orderBy('updated_at', 'desc'),
+        );
+        const docsSnap = await getDocs(docsQuery);
+        setDocuments(docsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+
+        const historyQuery = query(
+          collection(db, 'tool_history'),
+          where('user_id', '==', activeUser.uid),
+          orderBy('created_at', 'desc'),
+          limit(10),
+        );
+        const historySnap = await getDocs(historyQuery);
+        setHistory(historySnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      } catch (err) {
+        setError(err.message || 'Failed to load data');
       }
+
       setLoading(false);
-    };
+    });
 
-    load();
-
-    return () => {
-      mounted = false;
-    };
-  }, [router, supabase]);
+    return () => unsubscribe();
+  }, [router]);
 
   const uploadDocument = async (file) => {
     if (!user || !file) return;
-    if (!user.id) {
-      setError('Your session is missing a user id. Please sign out and sign in again.');
-      return;
-    }
     if (file.type !== 'application/pdf') {
       setError('Please upload a PDF file.');
       return;
@@ -99,82 +123,81 @@ export default function DashboardClient() {
     setUploading(true);
     setError('');
 
-    const cleanName = sanitizeName(file.name);
-    const storagePath = `${user.id}/${crypto.randomUUID()}-${cleanName}`;
+    try {
+      const cleanName = sanitizeName(file.name);
+      const blobPath = `documents/${user.uid}/${crypto.randomUUID()}-${cleanName}`;
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('path', blobPath);
 
-    const { error: uploadError } = await supabase.storage.from('documents').upload(storagePath, file, {
-      contentType: file.type,
-      upsert: false,
-    });
+      const uploadRes = await fetch('/api/blob/upload', {
+        method: 'POST',
+        body: formData,
+      });
 
-    if (uploadError) {
-      setUploading(false);
-      setError(uploadError.message);
-      return;
-    }
+      if (!uploadRes.ok) {
+        const errData = await uploadRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to upload file to storage');
+      }
 
-    const { data: inserted, error: insertError } = await supabase
-      .from('documents')
-      .insert({
-        user_id: user.id,
+      const blob = await uploadRes.json();
+
+      const docRef = await addDoc(collection(db, 'documents'), {
+        user_id: user.uid,
         title: file.name,
-        file_path: storagePath,
+        file_path: blob.url,
         file_size: file.size,
         mime_type: file.type,
         status: 'draft',
-      })
-      .select('id')
-      .single();
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
-    setUploading(false);
-
-    if (insertError || !inserted?.id) {
-      setError(insertError?.message || 'Failed to create document entry.');
-      return;
+      // Clear state before routing
+      setUploading(false);
+      router.push(`/editor/${docRef.id}`);
+    } catch (err) {
+      console.error('Upload Error:', err);
+      setUploading(false);
+      setError(err.message || 'Failed to upload document. Check console for details.');
     }
-
-    router.push(`/editor/${inserted.id}`);
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    await signOut(auth);
+    await fetch('/api/session', { method: 'DELETE' });
     router.push('/');
     router.refresh();
   };
 
-  const removeDraftAssets = async (ownerId, docId) => {
-    const prefix = `${ownerId}/${docId}`;
-    const { data: files, error: listError } = await supabase.storage.from('draft_assets').list(prefix, {
-      limit: 1000,
-    });
-    if (listError || !files?.length) return;
-
-    const paths = files.map((file) => `${prefix}/${file.name}`);
-    await supabase.storage.from('draft_assets').remove(paths);
-  };
-
-  const handleDeleteDocument = async (doc) => {
-    if (!user?.id) {
+  const handleDeleteDocument = async (docItem) => {
+    if (!user?.uid) {
       setError('Missing user session. Please sign in again.');
       return;
     }
 
     setError('');
-    setDeletingDocId(doc.id);
+    setDeletingDocId(docItem.id);
 
     try {
-      if (doc.file_path) {
-        await supabase.storage.from('documents').remove([doc.file_path]);
+      // Delete the main PDF from Vercel Blob
+      if (docItem.file_path && docItem.file_path.includes('public.blob.vercel-storage.com')) {
+        await fetch('/api/blob/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: docItem.file_path }),
+        });
       }
 
-      await removeDraftAssets(user.id, doc.id);
+      // Delete the Firestore document (cascading deletes for drafts aren't automatic in client SDK, 
+      // but fine for this scope)
+      await deleteDoc(doc(db, 'documents', docItem.id));
 
-      const { error: deleteError } = await supabase.from('documents').delete().eq('id', doc.id);
-      if (deleteError) throw deleteError;
-
-      setDocuments((prev) => prev.filter((item) => item.id !== doc.id));
+      setDocuments((prev) => prev.filter((item) => item.id !== docItem.id));
       setPendingDeleteDoc(null);
     } catch (deleteError) {
+      console.error('Delete error:', deleteError);
       setError(deleteError.message || 'Failed to delete draft.');
     } finally {
       setDeletingDocId('');
@@ -182,33 +205,10 @@ export default function DashboardClient() {
   };
 
   const displayName =
-    user?.user_metadata?.full_name ||
-    user?.user_metadata?.name ||
+    user?.displayName ||
     user?.email?.split('@')[0] ||
     'there';
   const latestDoc = documents[0] || null;
-  const activeThisWeek = documents.filter((doc) => {
-    const updatedAt = new Date(doc.updated_at).getTime();
-    return Date.now() - updatedAt < 7 * 24 * 60 * 60 * 1000;
-  }).length;
-  const draftCount = documents.filter((doc) => (doc.status || '').toLowerCase() === 'draft').length;
-  const checklist = [
-    {
-      id: 'upload',
-      label: 'Upload your first PDF',
-      done: documents.length > 0,
-    },
-    {
-      id: 'draft',
-      label: 'Create at least one draft',
-      done: draftCount > 0,
-    },
-    {
-      id: 'return',
-      label: 'Return and resume a draft',
-      done: documents.length > 1 || activeThisWeek > 0,
-    },
-  ];
 
   return (
     <main className="dashboard-page">
@@ -222,6 +222,37 @@ export default function DashboardClient() {
           </p>
         </div>
         <div className="header-actions">
+          <div className="dropdown-container" ref={dropdownRef}>
+            <button
+              className="ghost-btn"
+              onClick={() => setShowHistory(!showHistory)}
+              aria-label="Activity History"
+              title="Activity History"
+            >
+              <MoreVertical size={16} />
+            </button>
+            {showHistory && (
+              <div className="dropdown-menu">
+                <h3><Activity size={16} style={{ display: 'inline', verticalAlign: 'text-bottom', marginRight: '6px' }} /> Activity History</h3>
+                {loading ? (
+                  <p className="muted small" style={{ margin: '8px 0' }}>Loading history...</p>
+                ) : history.length ? (
+                  history.map((item) => (
+                    <div key={item.id} className="dropdown-item">
+                      <CheckCircle2 size={16} color="var(--accent)" style={{ flexShrink: 0 }} />
+                      <div>
+                        <p>Used <strong>{item.tool_name}</strong></p>
+                        <small>on {item.file_name}</small><br />
+                        <small>{new Date(item.created_at).toLocaleString()}</small>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="muted small" style={{ margin: '8px 0' }}>No recent activity.</p>
+                )}
+              </div>
+            )}
+          </div>
           <button
             className="ghost-btn theme-toggle"
             type="button"
@@ -242,62 +273,7 @@ export default function DashboardClient() {
         </div>
       </header>
 
-      <section className="stats-grid">
-        <article className="stat-card">
-          <p className="muted small">PDF files in workspace</p>
-          <h3>{documents.length}</h3>
-        </article>
-        <article className="stat-card">
-          <p className="muted small">PDF drafts in progress</p>
-          <h3>{draftCount}</h3>
-        </article>
-        <article className="stat-card">
-          <p className="muted small">Active this week</p>
-          <h3>{activeThisWeek}</h3>
-        </article>
-        <article className="stat-card">
-          <p className="muted small">Continue editing</p>
-          {latestDoc ? (
-            <Link href={`/editor/${latestDoc.id}`} className="ghost-btn">
-              Open latest PDF draft
-            </Link>
-          ) : (
-            <p className="muted small">No PDF draft yet</p>
-          )}
-        </article>
-      </section>
-
-      <section className="dashboard-grid">
-        <article className="dashboard-panel">
-          <h2>
-            <Sparkles size={18} /> What You Can Do
-          </h2>
-          <div className="capability-list">
-            <span className="capability-chip">Fill & Sign forms</span>
-            <span className="capability-chip">Quick Fill for non-form PDFs</span>
-            <span className="capability-chip">Saved signatures per user</span>
-            <span className="capability-chip">Autosaved drafts</span>
-            <span className="capability-chip">Export PDF / PNG / JPG</span>
-            <span className="capability-chip">Drag, resize, duplicate layers</span>
-          </div>
-        </article>
-
-        <article className="dashboard-panel">
-          <h2>
-            <CheckCircle2 size={18} /> Getting Started
-          </h2>
-          <ul className="checklist">
-            {checklist.map((item) => (
-              <li key={item.id} className={item.done ? 'done' : ''}>
-                <CheckCircle2 size={16} />
-                <span>{item.label}</span>
-              </li>
-            ))}
-          </ul>
-        </article>
-      </section>
-
-      <section className="dashboard-upload-card">
+      <section className="dashboard-upload-card" style={{ marginTop: '30px' }}>
         <label className="primary-btn" htmlFor="dashboard-pdf-upload" aria-disabled={uploading}>
           <FilePlus2 size={16} /> {uploading ? 'Uploading...' : 'Upload New PDF'}
         </label>
@@ -327,27 +303,27 @@ export default function DashboardClient() {
         {loading ? (
           <p className="muted">Loading documents...</p>
         ) : documents.length ? (
-          documents.map((doc) => (
-            <article className="doc-card" key={doc.id}>
+          documents.map((docItem) => (
+            <article className="doc-card" key={docItem.id}>
               <div className="doc-meta">
                 <FileText size={18} />
                 <div>
-                  <h3>{doc.title}</h3>
-                  <p className="muted small">Updated {new Date(doc.updated_at).toLocaleString()}</p>
+                  <h3>{docItem.title}</h3>
+                  <p className="muted small">Updated {new Date(docItem.updated_at).toLocaleString()}</p>
                 </div>
               </div>
               <div className="doc-actions">
-                <span className="chip">{doc.status || 'draft'}</span>
-                <Link href={`/editor/${doc.id}`} className="action-btn">
+                <span className="chip">{docItem.status || 'draft'}</span>
+                <Link href={`/editor/${docItem.id}`} className="action-btn">
                   <PenTool size={16} /> Open Editor
                 </Link>
                 <button
                   type="button"
                   className="danger-btn"
-                  onClick={() => setPendingDeleteDoc(doc)}
-                  disabled={deletingDocId === doc.id}
+                  onClick={() => setPendingDeleteDoc(docItem)}
+                  disabled={deletingDocId === docItem.id}
                 >
-                  <Trash2 size={16} /> {deletingDocId === doc.id ? 'Deleting...' : 'Delete'}
+                  <Trash2 size={16} /> {deletingDocId === docItem.id ? 'Deleting...' : 'Delete'}
                 </button>
               </div>
             </article>
@@ -357,40 +333,86 @@ export default function DashboardClient() {
         )}
       </section>
 
-      {pendingDeleteDoc ? (
-        <div className="modal-backdrop" role="presentation" onClick={() => setPendingDeleteDoc(null)}>
-          <section
-            className="confirm-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-draft-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h3 id="delete-draft-title">Delete Draft?</h3>
-            <p className="muted">
-              This will permanently remove <strong>{pendingDeleteDoc.title}</strong> and all associated draft data.
-            </p>
-            <div className="stack">
-              <button
-                type="button"
-                className="ghost-btn"
-                onClick={() => setPendingDeleteDoc(null)}
-                disabled={deletingDocId === pendingDeleteDoc.id}
+      <section className="tools-grid-wrapper" style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid var(--line)' }}>
+        <h2 style={{ marginBottom: '20px', fontSize: '1.4rem' }}>Explore All Tools</h2>
+        <div className="landing-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
+          {TOOLS.map((tool) => {
+            const Icon = tool.icon;
+            return (
+              <Link
+                href={tool.id === 'sign-edit-pdf' ? '#' : tool.href}
+                key={tool.id}
+                className="dashboard-panel"
+                onClick={(e) => {
+                  if (tool.id === 'sign-edit-pdf') {
+                    e.preventDefault();
+                    document.getElementById('dashboard-pdf-upload')?.click();
+                  }
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '14px',
+                  textDecoration: 'none',
+                  transition: 'transform 0.2s, box-shadow 0.2s',
+                  padding: '16px',
+                  cursor: 'pointer'
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = 'var(--shadow)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = ''; }}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="danger-btn"
-                onClick={() => handleDeleteDocument(pendingDeleteDoc)}
-                disabled={deletingDocId === pendingDeleteDoc.id}
-              >
-                <Trash2 size={16} /> {deletingDocId === pendingDeleteDoc.id ? 'Deleting...' : 'Delete Draft'}
-              </button>
-            </div>
-          </section>
+                <div style={{ color: tool.color, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${tool.color}15`, padding: '12px', borderRadius: '12px' }}>
+                  <Icon size={24} />
+                </div>
+                <div>
+                  <h3 style={{ margin: '0 0 4px', fontSize: '1.1rem', color: 'var(--ink)' }}>{tool.name}</h3>
+                  <p className="muted" style={{ margin: 0, fontSize: '0.85rem', lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {tool.description}
+                  </p>
+                </div>
+              </Link>
+            );
+          })}
         </div>
-      ) : null}
-    </main>
+      </section>
+
+      {
+        pendingDeleteDoc ? (
+          <div className="modal-backdrop" role="presentation" onClick={() => setPendingDeleteDoc(null)}>
+            <section
+              className="confirm-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-draft-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 id="delete-draft-title">Delete Draft?</h3>
+              <p className="muted">
+                This will permanently remove <strong>{pendingDeleteDoc.title}</strong> and all associated draft data.
+              </p>
+              <div className="stack">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setPendingDeleteDoc(null)}
+                  disabled={deletingDocId === pendingDeleteDoc.id}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="danger-btn"
+                  onClick={() => handleDeleteDocument(pendingDeleteDoc)}
+                  disabled={deletingDocId === pendingDeleteDoc.id}
+                >
+                  <Trash2 size={16} /> {deletingDocId === pendingDeleteDoc.id ? 'Deleting...' : 'Delete Draft'}
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null
+      }
+      <Footer />
+    </main >
   );
 }
