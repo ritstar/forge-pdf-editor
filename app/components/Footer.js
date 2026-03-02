@@ -5,7 +5,7 @@ export default function Footer() {
     <footer style={{
       textAlign: 'center',
       padding: '24px',
-      marginTop: 'auto',
+      marginTop: '36px',
       borderTop: '1px solid var(--line)',
       color: 'var(--muted)',
       fontSize: '0.9rem',

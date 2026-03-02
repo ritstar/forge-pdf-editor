@@ -11,6 +11,10 @@ Forge PDF Editor is a Firebase-backed PDF workspace with user accounts, Google l
 - Landing page + auth flow (`/`, `/login`, `/signup`)
 - Email/password auth and Google OAuth (via Firebase)
 - User-scoped dashboard for uploaded PDFs
+- Dashboard UX polish:
+  - Activity history menu is compact, scrollable, and opened from the three-dots action at the end of header controls
+  - Refresh action now animates the refresh icon on click
+  - Explore tools are grouped with all "Coming Soon" tools shown in a separate bottom section
 - Draft autosave per document (manual save also available)
 - Delete draft documents from dashboard (with storage cleanup)
 - Signature library per user (save once, reuse anytime)
@@ -89,6 +93,7 @@ Draft snapshot includes editor overlays plus form fill values.
 
 - All document and signature data is tied to authenticated users.
 - Never expose Firebase Admin keys in client-side code.
+- Dashboard footer includes project credit and dynamic year rendering.
 
 ## Scripts
 

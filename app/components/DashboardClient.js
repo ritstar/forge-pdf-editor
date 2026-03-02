@@ -34,6 +34,20 @@ import ForgeLogo from './ForgeLogo';
 import { TOOLS } from '@/lib/toolsData';
 import Footer from './Footer';
 
+const COMING_SOON_TOOL_IDS = new Set([
+  'compress-pdf',
+  'pdf-to-word',
+  'pdf-to-powerpoint',
+  'pdf-to-excel',
+  'word-to-pdf',
+  'powerpoint-to-pdf',
+  'excel-to-pdf',
+  'html-to-pdf',
+  'protect-pdf',
+  'pdf-to-pdfa',
+  'repair-pdf',
+]);
+
 function sanitizeName(name) {
   return name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
 }
@@ -49,6 +63,7 @@ export default function DashboardClient() {
   const [deletingDocId, setDeletingDocId] = useState('');
   const [pendingDeleteDoc, setPendingDeleteDoc] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [refreshIconKey, setRefreshIconKey] = useState(0);
   const dropdownRef = useRef(null);
   const [theme, setTheme] = useState(() => {
     if (typeof document === 'undefined') return 'light';
@@ -208,7 +223,8 @@ export default function DashboardClient() {
     user?.displayName ||
     user?.email?.split('@')[0] ||
     'there';
-  const latestDoc = documents[0] || null;
+  const availableTools = TOOLS.filter((tool) => !COMING_SOON_TOOL_IDS.has(tool.id));
+  const comingSoonTools = TOOLS.filter((tool) => COMING_SOON_TOOL_IDS.has(tool.id));
 
   return (
     <main className="dashboard-page">
@@ -222,6 +238,29 @@ export default function DashboardClient() {
           </p>
         </div>
         <div className="header-actions">
+          <button
+            className="ghost-btn theme-toggle"
+            type="button"
+            onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            <span className="theme-toggle-label">
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </span>
+          </button>
+          <button
+            className="ghost-btn"
+            onClick={() => {
+              setRefreshIconKey((prev) => prev + 1);
+              router.refresh();
+            }}
+          >
+            <RefreshCw key={refreshIconKey} size={16} className="refresh-spin-once" /> Refresh
+          </button>
+          <button className="ghost-btn" onClick={handleSignOut}>
+            <LogOut size={16} /> Sign out
+          </button>
           <div className="dropdown-container" ref={dropdownRef}>
             <button
               className="ghost-btn"
@@ -234,42 +273,27 @@ export default function DashboardClient() {
             {showHistory && (
               <div className="dropdown-menu">
                 <h3><Activity size={16} style={{ display: 'inline', verticalAlign: 'text-bottom', marginRight: '6px' }} /> Activity History</h3>
-                {loading ? (
-                  <p className="muted small" style={{ margin: '8px 0' }}>Loading history...</p>
-                ) : history.length ? (
-                  history.map((item) => (
-                    <div key={item.id} className="dropdown-item">
-                      <CheckCircle2 size={16} color="var(--accent)" style={{ flexShrink: 0 }} />
-                      <div>
-                        <p>Used <strong>{item.tool_name}</strong></p>
-                        <small>on {item.file_name}</small><br />
-                        <small>{new Date(item.created_at).toLocaleString()}</small>
+                <div className="dropdown-history-list">
+                  {loading ? (
+                    <p className="muted small" style={{ margin: '8px 0' }}>Loading history...</p>
+                  ) : history.length ? (
+                    history.map((item) => (
+                      <div key={item.id} className="dropdown-item">
+                        <CheckCircle2 size={16} color="var(--accent)" style={{ flexShrink: 0 }} />
+                        <div>
+                          <p>Used <strong>{item.tool_name}</strong></p>
+                          <small>on {item.file_name}</small><br />
+                          <small>{new Date(item.created_at).toLocaleString()}</small>
+                        </div>
                       </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="muted small" style={{ margin: '8px 0' }}>No recent activity.</p>
-                )}
+                    ))
+                  ) : (
+                    <p className="muted small" style={{ margin: '8px 0' }}>No recent activity.</p>
+                  )}
+                </div>
               </div>
             )}
           </div>
-          <button
-            className="ghost-btn theme-toggle"
-            type="button"
-            onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
-            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-            <span className="theme-toggle-label">
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </span>
-          </button>
-          <button className="ghost-btn" onClick={() => router.refresh()}>
-            <RefreshCw size={16} /> Refresh
-          </button>
-          <button className="ghost-btn" onClick={handleSignOut}>
-            <LogOut size={16} /> Sign out
-          </button>
         </div>
       </header>
 
@@ -336,7 +360,7 @@ export default function DashboardClient() {
       <section className="tools-grid-wrapper" style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid var(--line)' }}>
         <h2 style={{ marginBottom: '20px', fontSize: '1.4rem' }}>Explore All Tools</h2>
         <div className="landing-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
-          {TOOLS.map((tool) => {
+          {availableTools.map((tool) => {
             const Icon = tool.icon;
             return (
               <Link
@@ -364,8 +388,8 @@ export default function DashboardClient() {
                 <div style={{ color: tool.color, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${tool.color}15`, padding: '12px', borderRadius: '12px' }}>
                   <Icon size={24} />
                 </div>
-                <div>
-                  <h3 style={{ margin: '0 0 4px', fontSize: '1.1rem', color: 'var(--ink)' }}>{tool.name}</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--ink)' }}>{tool.name}</h3>
                   <p className="muted" style={{ margin: 0, fontSize: '0.85rem', lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                     {tool.description}
                   </p>
@@ -374,6 +398,45 @@ export default function DashboardClient() {
             );
           })}
         </div>
+
+        {comingSoonTools.length ? (
+          <>
+            <h3 style={{ margin: '28px 0 14px', fontSize: '1.1rem' }}>Coming Soon</h3>
+            <div className="landing-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
+              {comingSoonTools.map((tool) => {
+                const Icon = tool.icon;
+                return (
+                  <Link
+                    href={tool.href}
+                    key={tool.id}
+                    className="dashboard-panel"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '14px',
+                      textDecoration: 'none',
+                      transition: 'transform 0.2s, box-shadow 0.2s',
+                      padding: '16px',
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = 'var(--shadow)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = ''; }}
+                  >
+                    <div style={{ color: tool.color, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${tool.color}15`, padding: '12px', borderRadius: '12px' }}>
+                      <Icon size={24} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--ink)' }}>{tool.name}</h3>
+                      <p className="muted" style={{ margin: 0, fontSize: '0.85rem', lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                        {tool.description}
+                      </p>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </>
+        ) : null}
       </section>
 
       {
