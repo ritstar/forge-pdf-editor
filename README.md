@@ -11,27 +11,23 @@ Forge PDF Editor is a Firebase-backed PDF workspace with user accounts, Google l
 - Landing page + auth flow (`/`, `/login`, `/signup`)
 - Email/password auth and Google OAuth (via Firebase)
 - User-scoped dashboard for uploaded PDFs
-- Dashboard UX polish:
-  - Activity history menu is compact, scrollable, and opened from the three-dots action at the end of header controls
-  - Refresh action now animates the refresh icon on click
-  - Explore tools are grouped with all "Coming Soon" tools shown in a separate bottom section
-  - Upload area is presented as a dedicated Sign/Edit PDF card
-- Marketing/legal pages:
-  - Added About, Privacy Policy, Terms of Service, and Contact routes
-  - Shared landing-style footer is reused across these pages for consistency
+- Activity history menu in dashboard (compact, scrollable)
+- Tool catalog split between available tools and "Coming Soon" tools
+- Dedicated Sign/Edit PDF upload card in dashboard
+- Informational/legal pages: About, Privacy Policy, Terms of Service, Contact
 - Draft autosave per document (manual save also available)
 - Delete draft documents from dashboard (with storage cleanup)
 - Signature library per user (save once, reuse anytime)
 - Multi-page PDF editing with text, image, and signature overlays
-- Organize PDF enhancements:
+- Organize PDF:
   - Rearrange pages to any position (drag-and-drop)
   - Mark/restore pages for deletion
-  - Undo support and right-side change history panel with noise-reduction logic
+  - Undo support and right-side change history panel
 - Fill & Sign panel:
   - Detect and fill interactive PDF fields (text, checkbox, radio, dropdown/list)
   - Quick actions for date and initials
 - Export edited PDF and current page image formats
-- Unlock PDF is currently marked as Coming Soon in this release (advanced preserve-unlock pipeline pending backend engine support)
+- Unlock PDF is currently listed as Coming Soon
 
 ## Tech Stack
 
