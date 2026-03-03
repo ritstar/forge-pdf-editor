@@ -43,6 +43,7 @@ const COMING_SOON_TOOL_IDS = new Set([
   'powerpoint-to-pdf',
   'excel-to-pdf',
   'html-to-pdf',
+  'unlock-pdf',
   'protect-pdf',
   'pdf-to-pdfa',
   'repair-pdf',
@@ -223,7 +224,9 @@ export default function DashboardClient() {
     user?.displayName ||
     user?.email?.split('@')[0] ||
     'there';
-  const availableTools = TOOLS.filter((tool) => !COMING_SOON_TOOL_IDS.has(tool.id));
+  const availableTools = TOOLS.filter(
+    (tool) => !COMING_SOON_TOOL_IDS.has(tool.id) && tool.id !== 'sign-edit-pdf'
+  );
   const comingSoonTools = TOOLS.filter((tool) => COMING_SOON_TOOL_IDS.has(tool.id));
 
   return (
@@ -298,6 +301,17 @@ export default function DashboardClient() {
       </header>
 
       <section className="dashboard-upload-card" style={{ marginTop: '30px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: '260px' }}>
+          <div style={{ color: '#805AD5', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#805AD515', padding: '10px', borderRadius: '10px' }}>
+            <PenTool size={20} />
+          </div>
+          <div style={{ display: 'grid', gap: '6px' }}>
+            <p style={{ margin: 0, fontWeight: 600 }}>Sign/Edit PDF</p>
+            <p className="muted small" style={{ margin: 0 }}>
+              Upload a PDF to start editing. Your changes are autosaved as a private draft in your account.
+            </p>
+          </div>
+        </div>
         <label className="primary-btn" htmlFor="dashboard-pdf-upload" aria-disabled={uploading}>
           <FilePlus2 size={16} /> {uploading ? 'Uploading...' : 'Upload New PDF'}
         </label>
@@ -313,9 +327,6 @@ export default function DashboardClient() {
             uploadDocument(file);
           }}
         />
-        <p className="muted small">
-          Upload a PDF to start editing. Your changes are autosaved as a private draft in your account.
-        </p>
         {error ? <p className="error-text">{error}</p> : null}
       </section>
 
@@ -364,15 +375,9 @@ export default function DashboardClient() {
             const Icon = tool.icon;
             return (
               <Link
-                href={tool.id === 'sign-edit-pdf' ? '#' : tool.href}
+                href={tool.href}
                 key={tool.id}
                 className="dashboard-panel"
-                onClick={(e) => {
-                  if (tool.id === 'sign-edit-pdf') {
-                    e.preventDefault();
-                    document.getElementById('dashboard-pdf-upload')?.click();
-                  }
-                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',

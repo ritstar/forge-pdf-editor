@@ -19,6 +19,7 @@ const COMING_SOON_TOOL_IDS = new Set([
   'powerpoint-to-pdf',
   'excel-to-pdf',
   'html-to-pdf',
+  'unlock-pdf',
   'protect-pdf',
   'pdf-to-pdfa',
   'repair-pdf',
