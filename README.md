@@ -17,13 +17,14 @@ Forge PDF Editor is a Firebase-backed PDF workspace with user accounts, Google l
 - Signature library: Save and reuse signatures across documents.
 - Legal/info pages: About, Privacy Policy, Terms of Service, Contact.
 
-### PDF Editor
-- Multi-page editing: Add and position text, images, and signatures.
-- Fill & Sign: Detect and fill form fields (text, checkbox, radio, dropdown/list).
-- Quick fill actions: Fast date and initials insertion.
-- Export options: Export edited PDFs and page images.
-
 ### Available PDF Tools
+- PDF Editor (Sign/Edit PDF): Full in-browser editing workspace for multi-page PDFs.
+  - Upload and open a PDF draft tied to your account.
+  - Add, move, resize, and style text overlays.
+  - Insert image overlays and saved signature overlays.
+  - Fill interactive form fields (text, checkbox, radio, dropdown/list) with quick date/initial actions.
+  - Maintain work with autosave + manual save support.
+  - Export edited output as PDF and page image formats.
 - Merge PDF: Combine multiple PDFs in custom order.
 - Split PDF: Extract a page range into a new PDF.
 - JPG to PDF: Convert JPG/PNG images into a PDF document.
