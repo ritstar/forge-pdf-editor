@@ -1,40 +1,47 @@
 # Forge PDF Editor
 
-Forge PDF Editor is a Firebase-backed PDF workspace with user accounts, Google login, saved signatures, fill-and-sign support, and persistent drafts.
+Forge PDF Editor is a full PDF toolkit built with Next.js, Firebase, Vercel Blob, and a Dockerized FastAPI backend. It combines an authenticated PDF workspace with browser-based editing tools and server-powered file conversion and repair utilities.
 
-## Live App
+## Live Deployment
 
-- Production: https://forge-pdf-editor.vercel.app
+- Frontend: https://forge-pdf-editor.vercel.app
+- Backend API: https://forge-pdf-tools-api.onrender.com
 
-## Available Features
+## What It Includes
 
-### Workspace and Account
-- Authentication: Email/password login and Google OAuth.
-- User dashboard: User-scoped document list, recent activity, and quick access to tools.
-- Sign/Edit entry card: Dedicated upload card to start PDF editing quickly.
-- Draft persistence: Autosave and resume document drafts.
-- Document management: Delete drafts and clean up related storage.
-- Signature library: Save and reuse signatures across documents.
-- Legal/info pages: About, Privacy Policy, Terms of Service, Contact.
+### Workspace
 
-### Available PDF Tools
-- PDF Editor (Sign/Edit PDF): Full in-browser editing workspace for multi-page PDFs.
-  - Upload and open a PDF draft tied to your account.
-  - Add, move, resize, and style text overlays.
-  - Insert image overlays and saved signature overlays.
-  - Fill interactive form fields (text, checkbox, radio, dropdown/list) with quick date/initial actions.
-  - Maintain work with autosave + manual save support.
-  - Export edited output as PDF and page image formats.
-- Merge PDF: Combine multiple PDFs in custom order.
-- Split PDF: Extract a page range into a new PDF.
-- JPG to PDF: Convert JPG/PNG images into a PDF document.
-- PDF to JPG: Convert PDF pages to JPG (single or ZIP download).
-- Page Numbers: Add page numbers with configurable format and position.
-- Add Watermark: Apply text watermark with opacity and styling controls.
-- Rotate PDF: Rotate individual pages or all pages and export.
-- Organize PDF: Rearrange pages (drag-and-drop), mark pages for deletion, undo actions, and view change history.
+- Email/password authentication and Google sign-in
+- User dashboard with recent drafts and tool history
+- Persistent document drafts stored per user
+- Signature library for reuse across documents
+- Autosave and resume editing workflow
+- Legal pages: About, Privacy Policy, Terms of Service, Contact
 
-### Backend-Powered Tools (FastAPI)
+### Editor
+
+- Multi-page PDF editing
+- Text overlays with styling controls
+- Image overlays
+- Signature placement and reuse
+- Interactive PDF form filling
+- Quick actions for dates and initials
+- Manual save plus autosave support
+- Export edited documents
+
+### Browser-Based PDF Tools
+
+- Merge PDF
+- Split PDF
+- JPG to PDF
+- PDF to JPG
+- Add page numbers
+- Add watermark
+- Rotate PDF
+- Organize PDF pages
+
+### Backend-Powered PDF Tools
+
 - Compress PDF
 - PDF to Word
 - PDF to PowerPoint
@@ -48,88 +55,120 @@ Forge PDF Editor is a Firebase-backed PDF workspace with user accounts, Google l
 - PDF to PDF/A
 - Repair PDF
 
-## Tech Stack
+## Stack
 
-- Next.js 16 (App Router)
+- Next.js 16 App Router
 - React 19
-- Firebase Auth + Firestore
-- Vercel Blob (for fast, native Next.js object storage)
-- `react-pdf` + `pdfjs-dist`
+- Firebase Auth
+- Firestore
+- Vercel Blob
+- `react-pdf`
+- `pdfjs-dist`
 - `pdf-lib`
+- FastAPI
+- Docker
+- LibreOffice, Ghostscript, qpdf, WeasyPrint, PyMuPDF
 
-## Local Setup
+## Project Structure
 
-1. Install dependencies:
+```text
+app/        Next.js routes, editor UI, tool pages, API routes
+backend/    FastAPI service used for conversion/compression/repair tools
+lib/        Shared client and app utilities
+public/     Static assets
+```
+
+## Local Development
+
+### 1. Install frontend dependencies
 
 ```bash
 npm install
 ```
 
-2. Create `.env.local`:
+### 2. Create `.env.local`
 
 ```bash
-# Firebase Client SDK
+# Firebase client SDK
 NEXT_PUBLIC_FIREBASE_API_KEY=...
 NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
 NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
 NEXT_PUBLIC_FIREBASE_APP_ID=...
 
-# Firebase Admin SDK (Server-side)
+# Firebase Admin SDK
 FIREBASE_ADMIN_PROJECT_ID=...
 FIREBASE_ADMIN_CLIENT_EMAIL=...
 FIREBASE_ADMIN_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 
-# Vercel Blob Token
-BLOB_READ_WRITE_TOKEN="..."
+# Vercel Blob
+BLOB_READ_WRITE_TOKEN=...
 
+# App URLs
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+PDF_TOOLS_API_URL=http://localhost:8000
 ```
 
-3. Create a Firebase Project in the [Firebase Console](https://console.firebase.google.com/).
+### 3. Configure Firebase
 
-4. Enable Firebase Services:
-    - **Authentication**: Enable Email/Password and Google providers.
-    - **Firestore**: Create a database in "Production mode" and apply rules from `firestore.rules`.
+- Create a Firebase project
+- Enable Email/Password auth
+- Enable Google auth
+- Create Firestore in production mode
+- Apply rules from `firestore.rules`
 
-5. Create a Vercel Blob store:
-    - Go to Vercel Dashboard > Storage > Create Database > Blob.
-    - Set Access to **Public**.
-    - Copy the `BLOB_READ_WRITE_TOKEN`.
+### 4. Configure Vercel Blob
 
-6. Start dev server:
+- Create a Blob store in Vercel
+- Use a public-access Blob store
+- Copy the read/write token into `.env.local`
+
+### 5. Run the frontend
 
 ```bash
 npm run dev
 ```
 
-7. Start Python backend (Docker):
+### 6. Run the backend with Docker
 
 ```bash
 docker compose up --build pdf-tools-api
 ```
 
-8. Configure server-side proxy backend URL in `.env.local`:
+Frontend runs at `http://localhost:3000`.
+
+Backend runs at `http://localhost:8000`.
+
+## Production Deployment
+
+### Frontend
+
+- Hosted on Vercel
+- Production branch: `main`
+- Required env:
 
 ```bash
-PDF_TOOLS_API_URL=http://localhost:8000
+PDF_TOOLS_API_URL=https://forge-pdf-tools-api.onrender.com
 ```
 
-## Firebase Rules
+### Backend
 
-The app expects Firestore rules to be configured for user data protection.
-See `firestore.rules` in the root directory.
+- Hosted on Render
+- Production branch: `main`
+- Uses `render.yaml`
+- Docker image is built from `backend/Dockerfile`
 
-## Draft Model
+Recommended Render env:
 
-Each document has one latest draft row in the `drafts` subcollection of the document in Firestore.
-Draft snapshot includes editor overlays plus form fill values.
+```bash
+CORS_ORIGINS=https://forge-pdf-editor.vercel.app,http://localhost:3000
+```
 
-## Notes
+## Notes About Backend Tooling
 
-- All document and signature data is tied to authenticated users.
-- Never expose Firebase Admin keys in client-side code.
-- Dashboard footer includes project credit and dynamic year rendering.
+- Backend-powered tools are proxied through the Next.js route at `app/api/pdf-tools/[toolId]/route.js`
+- The browser talks to the Next.js app, and Next.js forwards requests to the FastAPI backend
+- This keeps the backend URL configurable through `PDF_TOOLS_API_URL`
 
 ## Scripts
 
@@ -139,3 +178,9 @@ npm run build
 npm run start
 npm run lint
 ```
+
+## Current Status
+
+- Frontend and backend are both wired for production
+- `main` is the deployment branch for both Vercel and Render
+- All currently listed tools in the app are implemented and exposed in the UI
