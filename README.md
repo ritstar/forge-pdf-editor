@@ -107,6 +107,7 @@ BLOB_READ_WRITE_TOKEN=...
 # App URLs
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 PDF_TOOLS_API_URL=http://localhost:8000
+PDF_TOOLS_API_SECRET=your-shared-secret
 ```
 
 ### 3. Configure Firebase
@@ -149,6 +150,7 @@ Backend runs at `http://localhost:8000`.
 
 ```bash
 PDF_TOOLS_API_URL=https://forge-pdf-tools-api.onrender.com
+PDF_TOOLS_API_SECRET=your-shared-secret
 ```
 
 ### Backend
@@ -162,6 +164,7 @@ Recommended Render env:
 
 ```bash
 CORS_ORIGINS=https://forge-pdf-editor.vercel.app,http://localhost:3000
+PDF_TOOLS_API_SECRET=your-shared-secret
 ```
 
 ## Notes About Backend Tooling
@@ -169,6 +172,8 @@ CORS_ORIGINS=https://forge-pdf-editor.vercel.app,http://localhost:3000
 - Backend-powered tools are proxied through the Next.js route at `app/api/pdf-tools/[toolId]/route.js`
 - The browser talks to the Next.js app, and Next.js forwards requests to the FastAPI backend
 - This keeps the backend URL configurable through `PDF_TOOLS_API_URL`
+- Backend requests are protected with a shared server-side secret via `PDF_TOOLS_API_SECRET`
+- The same secret must be configured in both the frontend server environment and the backend service environment
 
 ## Scripts
 

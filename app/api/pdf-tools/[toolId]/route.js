@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
+const API_KEY_HEADER = 'x-api-key';
 
 const ALLOWED_TOOL_IDS = new Set([
   'compress-pdf',
@@ -21,6 +22,10 @@ function backendUrl() {
   return (process.env.PDF_TOOLS_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
 }
 
+function backendApiSecret() {
+  return (process.env.PDF_TOOLS_API_SECRET || '').trim();
+}
+
 export async function POST(request, { params }) {
   const { toolId } = await params;
 
@@ -28,11 +33,22 @@ export async function POST(request, { params }) {
     return NextResponse.json({ error: 'Unsupported tool.' }, { status: 404 });
   }
 
+  const apiSecret = backendApiSecret();
+  if (!apiSecret) {
+    return NextResponse.json(
+      { error: 'Backend API secret is not configured.' },
+      { status: 500 }
+    );
+  }
+
   try {
     const form = await request.formData();
 
     const upstream = await fetch(`${backendUrl()}/tools/${toolId}`, {
       method: 'POST',
+      headers: {
+        [API_KEY_HEADER]: apiSecret,
+      },
       body: form,
       cache: 'no-store',
     });

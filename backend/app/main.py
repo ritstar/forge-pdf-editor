@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -10,7 +11,7 @@ from typing import Optional
 
 import fitz
 import pikepdf
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from openpyxl import Workbook
@@ -24,11 +25,27 @@ from pptx import Presentation
 
 APP_TITLE = "Forge PDF Tools API"
 APP_VERSION = "0.1.0"
+API_KEY_HEADER = "x-api-key"
+API_KEY_ENV = "PDF_TOOLS_API_SECRET"
 
 
 def _allowed_origins() -> list[str]:
     raw = os.getenv("CORS_ORIGINS", "http://localhost:3000")
     return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def _expected_api_key() -> str:
+    value = os.getenv(API_KEY_ENV, "").strip()
+    if not value:
+        raise HTTPException(status_code=500, detail=f"Missing required server env: {API_KEY_ENV}")
+    return value
+
+
+def _require_api_key(request: Request) -> None:
+    provided = request.headers.get(API_KEY_HEADER, "")
+    expected = _expected_api_key()
+    if not secrets.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
@@ -174,6 +191,7 @@ def _convert_to_pdfa(input_path: Path, output_path: Path) -> None:
 
 @app.post("/tools/{tool_id}")
 async def run_tool(
+    request: Request,
     tool_id: str,
     file: Optional[UploadFile] = File(default=None),
     password: str = Form(default=""),
@@ -181,6 +199,7 @@ async def run_tool(
     compression_level: str = Form(default="medium"),
     html_content: str = Form(default=""),
 ):
+    _require_api_key(request)
     tmpdir = _temp_dir()
 
     try:
