@@ -235,15 +235,24 @@ export default function DashboardClient() {
           </button>
           <button
             className="ghost-btn"
+            aria-label="Refresh dashboard"
+            title="Refresh dashboard"
             onClick={() => {
               setRefreshIconKey((prev) => prev + 1);
               router.refresh();
             }}
           >
-            <RefreshCw key={refreshIconKey} size={16} className="refresh-spin-once" /> Refresh
+            <RefreshCw key={refreshIconKey} size={16} className="refresh-spin-once" />
+            <span className="action-btn-label">Refresh</span>
           </button>
-          <button className="ghost-btn" onClick={handleSignOut}>
-            <LogOut size={16} /> Sign out
+          <button
+            className="ghost-btn"
+            onClick={handleSignOut}
+            aria-label="Sign out"
+            title="Sign out"
+          >
+            <LogOut size={16} />
+            <span className="action-btn-label">Sign out</span>
           </button>
           <div className="dropdown-container" ref={dropdownRef}>
             <button

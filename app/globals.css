@@ -1236,6 +1236,37 @@ select {
     align-items: flex-start;
   }
 
+  .dashboard-header {
+    align-items: stretch;
+  }
+
+  .header-actions {
+    position: static;
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+
+  .header-actions .ghost-btn,
+  .header-actions .primary-btn {
+    flex: 0 0 auto;
+    padding: 0 10px;
+    min-height: 34px;
+  }
+
+  .dropdown-container {
+    position: static;
+  }
+
+  .dropdown-menu {
+    left: 10px;
+    right: 10px;
+    top: calc(100% + 10px);
+    width: auto;
+    max-height: min(50vh, 360px);
+  }
+
   .stats-grid {
     grid-template-columns: 1fr;
   }
@@ -1248,6 +1279,10 @@ select {
   }
 
   .theme-toggle-label {
+    display: none;
+  }
+
+  .action-btn-label {
     display: none;
   }
 
