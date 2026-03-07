@@ -1,0 +1,11 @@
+services:
+  pdf-tools-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: forge-pdf-tools-api
+    ports:
+      - "8000:8000"
+    environment:
+      - CORS_ORIGINS=http://localhost:3000
+    restart: unless-stopped

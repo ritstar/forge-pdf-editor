@@ -1,5 +1,5 @@
-import ComingSoonTool from '@/app/components/ComingSoonTool';
+import BackendToolClient from '@/app/components/BackendToolClient';
 
 export default function Page() {
-  return <ComingSoonTool toolId="protect" />;
+  return <BackendToolClient toolId="protect-pdf" />;
 }

@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { FileText, Lock, Moon, Sparkles, Sun } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -10,28 +9,11 @@ import ForgeLogo from './components/ForgeLogo';
 import LandingFooter from './components/LandingFooter';
 import { TOOLS } from '@/lib/toolsData';
 
-const COMING_SOON_TOOL_IDS = new Set([
-  'compress-pdf',
-  'pdf-to-word',
-  'pdf-to-powerpoint',
-  'pdf-to-excel',
-  'word-to-pdf',
-  'powerpoint-to-pdf',
-  'excel-to-pdf',
-  'html-to-pdf',
-  'unlock-pdf',
-  'protect-pdf',
-  'pdf-to-pdfa',
-  'repair-pdf',
-]);
-
 export default function LandingPage() {
-  const router = useRouter();
   const [theme, setTheme] = useState('light');
   const [user, setUser] = useState(null);
   const [authChecking, setAuthChecking] = useState(true);
-  const availableTools = TOOLS.filter((tool) => !COMING_SOON_TOOL_IDS.has(tool.id));
-  const comingSoonTools = TOOLS.filter((tool) => COMING_SOON_TOOL_IDS.has(tool.id));
+  const availableTools = TOOLS;
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -146,42 +128,6 @@ export default function LandingPage() {
             );
           })}
         </div>
-        {comingSoonTools.length ? (
-          <>
-            <h3 style={{ textAlign: 'center', margin: '34px 0 18px', fontSize: '1.35rem', letterSpacing: '-0.01em' }}>Coming Soon</h3>
-            <div className="landing-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-              {comingSoonTools.map((tool) => {
-                const Icon = tool.icon;
-                return (
-                  <Link
-                    href={tool.href}
-                    key={tool.id}
-                    className="landing-card"
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      textDecoration: 'none',
-                      transition: 'transform 0.2s, box-shadow 0.2s',
-                      cursor: 'pointer'
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = 'var(--shadow)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = ''; }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '14px' }}>
-                      <div style={{ color: tool.color, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${tool.color}15`, padding: '12px', borderRadius: '12px' }}>
-                        <Icon size={26} />
-                      </div>
-                      <h3 style={{ margin: 0, fontSize: '1.25rem', color: 'var(--ink)' }}>{tool.name}</h3>
-                    </div>
-                    <p className="muted" style={{ margin: 0, fontSize: '0.95rem', lineHeight: '1.5' }}>
-                      {tool.description}
-                    </p>
-                  </Link>
-                );
-              })}
-            </div>
-          </>
-        ) : null}
       </section>
 
       <LandingFooter />

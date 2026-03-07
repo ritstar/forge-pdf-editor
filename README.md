@@ -34,20 +34,19 @@ Forge PDF Editor is a Firebase-backed PDF workspace with user accounts, Google l
 - Rotate PDF: Rotate individual pages or all pages and export.
 - Organize PDF: Rearrange pages (drag-and-drop), mark pages for deletion, undo actions, and view change history.
 
-## Coming Soon Features
-
-- Compress PDF: Reduce file size while optimizing quality.
-- PDF to Word: Convert PDF to DOC/DOCX.
-- PDF to PowerPoint: Convert PDF to PPT/PPTX.
-- PDF to Excel: Extract PDF data into spreadsheet format.
-- Word to PDF: Convert DOC/DOCX files to PDF.
-- PowerPoint to PDF: Convert PPT/PPTX files to PDF.
-- Excel to PDF: Convert spreadsheet files to PDF.
-- HTML to PDF: Convert webpages/HTML content to PDF.
-- Unlock PDF: Remove PDF password security.
-- Protect PDF: Encrypt PDF files with password protection.
-- PDF to PDF/A: Convert PDF to archival PDF/A format.
-- Repair PDF: Attempt recovery for damaged/corrupted PDF files.
+### Backend-Powered Tools (FastAPI)
+- Compress PDF
+- PDF to Word
+- PDF to PowerPoint
+- PDF to Excel
+- Word to PDF
+- PowerPoint to PDF
+- Excel to PDF
+- HTML to PDF
+- Unlock PDF
+- Protect PDF
+- PDF to PDF/A
+- Repair PDF
 
 ## Tech Stack
 
@@ -102,6 +101,18 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 ```bash
 npm run dev
+```
+
+7. Start Python backend (Docker):
+
+```bash
+docker compose up --build pdf-tools-api
+```
+
+8. Configure server-side proxy backend URL in `.env.local`:
+
+```bash
+PDF_TOOLS_API_URL=http://localhost:8000
 ```
 
 ## Firebase Rules

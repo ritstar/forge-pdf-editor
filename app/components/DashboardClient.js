@@ -27,27 +27,11 @@ import {
   addDoc,
   deleteDoc,
   doc,
-  serverTimestamp,
 } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase/config';
 import ForgeLogo from './ForgeLogo';
 import { TOOLS } from '@/lib/toolsData';
 import Footer from './Footer';
-
-const COMING_SOON_TOOL_IDS = new Set([
-  'compress-pdf',
-  'pdf-to-word',
-  'pdf-to-powerpoint',
-  'pdf-to-excel',
-  'word-to-pdf',
-  'powerpoint-to-pdf',
-  'excel-to-pdf',
-  'html-to-pdf',
-  'unlock-pdf',
-  'protect-pdf',
-  'pdf-to-pdfa',
-  'repair-pdf',
-]);
 
 function sanitizeName(name) {
   return name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
@@ -224,10 +208,7 @@ export default function DashboardClient() {
     user?.displayName ||
     user?.email?.split('@')[0] ||
     'there';
-  const availableTools = TOOLS.filter(
-    (tool) => !COMING_SOON_TOOL_IDS.has(tool.id) && tool.id !== 'sign-edit-pdf'
-  );
-  const comingSoonTools = TOOLS.filter((tool) => COMING_SOON_TOOL_IDS.has(tool.id));
+  const availableTools = TOOLS.filter((tool) => tool.id !== 'sign-edit-pdf');
 
   return (
     <main className="dashboard-page">
@@ -404,44 +385,6 @@ export default function DashboardClient() {
           })}
         </div>
 
-        {comingSoonTools.length ? (
-          <>
-            <h3 style={{ margin: '28px 0 14px', fontSize: '1.1rem' }}>Coming Soon</h3>
-            <div className="landing-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
-              {comingSoonTools.map((tool) => {
-                const Icon = tool.icon;
-                return (
-                  <Link
-                    href={tool.href}
-                    key={tool.id}
-                    className="dashboard-panel"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '14px',
-                      textDecoration: 'none',
-                      transition: 'transform 0.2s, box-shadow 0.2s',
-                      padding: '16px',
-                      cursor: 'pointer'
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = 'var(--shadow)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = ''; }}
-                  >
-                    <div style={{ color: tool.color, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${tool.color}15`, padding: '12px', borderRadius: '12px' }}>
-                      <Icon size={24} />
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--ink)' }}>{tool.name}</h3>
-                      <p className="muted" style={{ margin: 0, fontSize: '0.85rem', lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                        {tool.description}
-                      </p>
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
-          </>
-        ) : null}
       </section>
 
       {
