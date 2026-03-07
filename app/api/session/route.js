@@ -1,11 +1,23 @@
 import { NextResponse } from 'next/server';
 import { getAdminAuth } from '@/lib/firebase/admin';
+import { getClientIp, takeRateLimitToken } from '@/lib/server/rate-limit';
 
 const SESSION_COOKIE_NAME = '__session';
 const EXPIRES_IN = 60 * 60 * 24 * 5 * 1000; // 5 days
 
 export async function POST(request) {
     try {
+        const rateLimit = takeRateLimitToken({
+            bucket: 'session-create',
+            key: getClientIp(request),
+            limit: 10,
+            windowMs: 5 * 60 * 1000,
+        });
+
+        if (!rateLimit.allowed) {
+            return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+        }
+
         const { idToken } = await request.json();
         if (!idToken) {
             return NextResponse.json({ error: 'Missing idToken' }, { status: 400 });

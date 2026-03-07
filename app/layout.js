@@ -1,4 +1,5 @@
 import './globals.css';
+import Script from 'next/script';
 
 export const metadata = {
   title: 'Forge PDF',
@@ -10,22 +11,11 @@ export const metadata = {
   },
 };
 
-const themeInitScript = `
-(() => {
-  try {
-    const stored = localStorage.getItem('forge-theme');
-    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const theme = stored || (prefersDark ? 'dark' : 'light');
-    document.documentElement.setAttribute('data-theme', theme);
-  } catch {}
-})();
-`;
-
 export default function RootLayout({ children }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <Script src="/theme-init.js" strategy="beforeInteractive" />
       </head>
       <body>{children}</body>
     </html>

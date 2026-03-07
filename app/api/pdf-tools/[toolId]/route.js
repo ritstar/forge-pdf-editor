@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getClientIp, takeRateLimitToken } from '@/lib/server/rate-limit';
 
 export const runtime = 'nodejs';
 const API_KEY_HEADER = 'x-api-key';
@@ -31,6 +32,17 @@ export async function POST(request, { params }) {
 
   if (!ALLOWED_TOOL_IDS.has(toolId)) {
     return NextResponse.json({ error: 'Unsupported tool.' }, { status: 404 });
+  }
+
+  const rateLimit = takeRateLimitToken({
+    bucket: 'pdf-tools-proxy',
+    key: getClientIp(request),
+    limit: 20,
+    windowMs: 60 * 1000,
+  });
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }
 
   const apiSecret = backendApiSecret();

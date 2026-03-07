@@ -16,6 +16,30 @@ import ForgeLogo from './ForgeLogo';
 
 const googleProvider = new GoogleAuthProvider();
 
+function authErrorMessage(error, mode) {
+  const code = error?.code || '';
+
+  if (mode === 'google') {
+    return 'Could not sign in with Google. Please try again.';
+  }
+
+  if (mode === 'signup') {
+    if (code === 'auth/weak-password') {
+      return 'Password must be at least 6 characters.';
+    }
+    if (code === 'auth/invalid-email') {
+      return 'Please enter a valid email address.';
+    }
+    return 'Could not create account. Please review your details and try again.';
+  }
+
+  if (mode === 'login') {
+    return 'Invalid email or password.';
+  }
+
+  return 'Authentication failed.';
+}
+
 async function createSessionCookie(user) {
   const idToken = await user.getIdToken();
   const res = await fetch('/api/session', {
@@ -103,7 +127,7 @@ export default function AuthForm({ mode, nextPath = '/app' }) {
       router.push(next);
       router.refresh();
     } catch (err) {
-      setError(err.message || 'Google sign-in failed');
+      setError(authErrorMessage(err, 'google'));
       setLoading(false);
     }
   };
@@ -131,7 +155,7 @@ export default function AuthForm({ mode, nextPath = '/app' }) {
       router.push(next);
       router.refresh();
     } catch (err) {
-      setError(err.message || 'Authentication failed');
+      setError(authErrorMessage(err, isSignup ? 'signup' : 'login'));
     } finally {
       setLoading(false);
     }

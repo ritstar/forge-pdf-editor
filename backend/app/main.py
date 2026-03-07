@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
+from threading import Lock
 from typing import Optional
+from urllib.parse import urlparse
 
 import fitz
 import pikepdf
@@ -18,7 +22,7 @@ from openpyxl import Workbook
 from pydantic import BaseModel
 from pypdf import PdfReader, PdfWriter
 from starlette.background import BackgroundTask
-from weasyprint import HTML
+from weasyprint import HTML, default_url_fetcher
 from docx import Document
 from pptx import Presentation
 
@@ -27,6 +31,13 @@ APP_TITLE = "Forge PDF Tools API"
 APP_VERSION = "0.1.0"
 API_KEY_HEADER = "x-api-key"
 API_KEY_ENV = "PDF_TOOLS_API_SECRET"
+MAX_HTML_INPUT_BYTES = 200_000
+RATE_LIMIT_MAX_REQUESTS = 20
+RATE_LIMIT_WINDOW_SECONDS = 60
+
+logger = logging.getLogger(__name__)
+_rate_limit_lock = Lock()
+_rate_limit_state: dict[str, list[float]] = {}
 
 
 def _allowed_origins() -> list[str]:
@@ -37,7 +48,8 @@ def _allowed_origins() -> list[str]:
 def _expected_api_key() -> str:
     value = os.getenv(API_KEY_ENV, "").strip()
     if not value:
-        raise HTTPException(status_code=500, detail=f"Missing required server env: {API_KEY_ENV}")
+        logger.error("Missing required server env for backend API authentication.")
+        raise HTTPException(status_code=500, detail="Server misconfiguration.")
     return value
 
 
@@ -46,6 +58,29 @@ def _require_api_key(request: Request) -> None:
     expected = _expected_api_key()
     if not secrets.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.headers.get("x-real-ip") or "unknown"
+
+
+def _enforce_rate_limit(request: Request) -> None:
+    current = time.monotonic()
+    key = _client_ip(request)
+
+    with _rate_limit_lock:
+        history = _rate_limit_state.get(key, [])
+        history = [item for item in history if current - item < RATE_LIMIT_WINDOW_SECONDS]
+
+        if len(history) >= RATE_LIMIT_MAX_REQUESTS:
+            _rate_limit_state[key] = history
+            raise HTTPException(status_code=429, detail="Too many requests.")
+
+        history.append(current)
+        _rate_limit_state[key] = history
 
 
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
@@ -92,6 +127,13 @@ def _as_download(path: Path, filename: str, tmpdir: Path) -> FileResponse:
         filename=filename,
         background=BackgroundTask(lambda: shutil.rmtree(tmpdir, ignore_errors=True)),
     )
+
+
+def _safe_html_fetcher(url: str, *args, **kwargs):
+    parsed = urlparse(url)
+    if parsed.scheme != "data":
+        raise ValueError("External resources are not allowed for HTML to PDF conversion.")
+    return default_url_fetcher(url, *args, **kwargs)
 
 
 def _pdf_to_word(input_path: Path, output_path: Path) -> None:
@@ -161,7 +203,8 @@ def _libreoffice_convert(input_path: Path, output_ext: str, out_dir: Path) -> Pa
 
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if proc.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"LibreOffice conversion failed: {proc.stderr or proc.stdout}")
+        logger.error("LibreOffice conversion failed: %s", (proc.stderr or proc.stdout).strip())
+        raise HTTPException(status_code=500, detail="Document conversion failed.")
 
     out_path = out_dir / f"{input_path.stem}.{output_ext}"
     if not out_path.exists():
@@ -186,7 +229,8 @@ def _convert_to_pdfa(input_path: Path, output_path: Path) -> None:
 
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if proc.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"PDF/A conversion failed: {proc.stderr or proc.stdout}")
+        logger.error("PDF/A conversion failed: %s", (proc.stderr or proc.stdout).strip())
+        raise HTTPException(status_code=500, detail="PDF/A conversion failed.")
 
 
 @app.post("/tools/{tool_id}")
@@ -200,6 +244,7 @@ async def run_tool(
     html_content: str = Form(default=""),
 ):
     _require_api_key(request)
+    _enforce_rate_limit(request)
     tmpdir = _temp_dir()
 
     try:
@@ -214,8 +259,11 @@ async def run_tool(
                 html_text = html_content
                 base_name = "html"
 
+            if len(html_text.encode("utf-8")) > MAX_HTML_INPUT_BYTES:
+                raise HTTPException(status_code=400, detail="HTML input is too large.")
+
             output_path = tmpdir / f"{base_name}.pdf"
-            HTML(string=html_text).write_pdf(str(output_path))
+            HTML(string=html_text, url_fetcher=_safe_html_fetcher).write_pdf(str(output_path))
             return _as_download(output_path, output_path.name, tmpdir)
 
         if file is None:
@@ -308,8 +356,9 @@ async def run_tool(
         shutil.rmtree(tmpdir, ignore_errors=True)
         raise
     except Exception as exc:  # pragma: no cover
+        logger.exception("Unexpected tool processing error for tool_id=%s", tool_id)
         shutil.rmtree(tmpdir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Failed to process file.") from exc
 
 
 @app.exception_handler(HTTPException)

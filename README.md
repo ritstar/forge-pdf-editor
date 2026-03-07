@@ -175,6 +175,15 @@ PDF_TOOLS_API_SECRET=your-shared-secret
 - Backend requests are protected with a shared server-side secret via `PDF_TOOLS_API_SECRET`
 - The same secret must be configured in both the frontend server environment and the backend service environment
 
+## Security Notes
+
+- Blob upload and delete routes require a valid authenticated session
+- Blob uploads are restricted by allowed path prefixes, file types, and size limits
+- Blob deletes are restricted to assets owned by the requesting user
+- The backend tool service is protected by an API secret and request rate limiting
+- The web app includes stricter security headers for production
+- After security-related Firestore rule updates, re-publish `firestore.rules`
+
 ## Scripts
 
 ```bash
