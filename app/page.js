@@ -12,15 +12,28 @@ import { TOOLS } from '@/lib/toolsData';
 export default function LandingPage() {
   const [theme, setTheme] = useState('light');
   const [user, setUser] = useState(null);
-  const [authChecking, setAuthChecking] = useState(true);
+  const [authChecking, setAuthChecking] = useState(() => Boolean(auth));
   const availableTools = TOOLS;
 
   useEffect(() => {
+    if (!auth) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setAuthChecking(false);
+    }, 2500);
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setAuthChecking(false);
+      window.clearTimeout(timeoutId);
     });
-    return () => unsubscribe();
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {

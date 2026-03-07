@@ -1,3 +1,14 @@
+const firebaseAuthDomain = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN;
+const frameSrc = [
+  "'self'",
+  'https://accounts.google.com',
+  'https://apis.google.com',
+];
+
+if (firebaseAuthDomain) {
+  frameSrc.push(`https://${firebaseAuthDomain}`);
+}
+
 /** @type {import('next').NextConfig} */
 const csp = [
   "default-src 'self'",
@@ -6,7 +17,7 @@ const csp = [
   "img-src 'self' data: blob: https:",
   "font-src 'self' data: https:",
   "connect-src 'self' https: wss:",
-  "frame-src 'self' https://accounts.google.com",
+  `frame-src ${frameSrc.join(' ')}`,
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",
