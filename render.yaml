@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: forge-pdf-tools-api
+    runtime: docker
+    plan: free
+    rootDir: backend
+    healthCheckPath: /health
+    envVars:
+      - key: CORS_ORIGINS
+        value: https://forge-pdf-editor.vercel.app,http://localhost:3000
