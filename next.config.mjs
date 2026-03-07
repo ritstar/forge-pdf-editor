@@ -12,7 +12,7 @@ if (firebaseAuthDomain) {
 /** @type {import('next').NextConfig} */
 const csp = [
   "default-src 'self'",
-  "script-src 'self' https://accounts.google.com https://apis.google.com https://www.gstatic.com",
+  "script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://www.gstatic.com",
   "style-src 'self' 'unsafe-inline' https:",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data: https:",
