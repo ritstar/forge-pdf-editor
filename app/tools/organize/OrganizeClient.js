@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { auth } from '@/lib/firebase/config';
@@ -101,6 +101,18 @@ export default function OrganizePdfPage() {
             },
         ].slice(-120));
     };
+
+    const handleMoveUp = useCallback((displayIndex) => {
+        movePage(displayIndex, displayIndex - 1);
+    }, []);
+
+    const handleMoveDown = useCallback((displayIndex) => {
+        movePage(displayIndex, displayIndex + 1);
+    }, []);
+
+    const handleToggleDelete = useCallback((pageIndex) => {
+        togglePageDeletion(pageIndex);
+    }, []);
 
     const addMoveHistory = (pageIndex, fromPos, toPos) => {
         const latest = changeHistoryRef.current[0];
@@ -414,7 +426,7 @@ export default function OrganizePdfPage() {
                                                                 className="ghost-btn"
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
-                                                                    movePage(displayIndex, displayIndex - 1);
+                                                                    handleMoveUp(displayIndex);
                                                                 }}
                                                                 disabled={displayIndex === 0}
                                                                 style={{ minHeight: '28px', padding: '0 8px', borderRadius: '8px', background: 'var(--surface)' }}
@@ -427,7 +439,7 @@ export default function OrganizePdfPage() {
                                                                 className="ghost-btn"
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
-                                                                    movePage(displayIndex, displayIndex + 1);
+                                                                    handleMoveDown(displayIndex);
                                                                 }}
                                                                 disabled={displayIndex === pageOrder.length - 1}
                                                                 style={{ minHeight: '28px', padding: '0 8px', borderRadius: '8px', background: 'var(--surface)' }}
@@ -442,7 +454,7 @@ export default function OrganizePdfPage() {
                                                             className="ghost-btn"
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
-                                                                togglePageDeletion(pageIndex);
+                                                                handleToggleDelete(pageIndex);
                                                             }}
                                                             style={{
                                                                 position: 'absolute',

@@ -302,7 +302,9 @@ export default function ForgeEditor({
         }
       });
     };
-  }, [elements]);
+    // Only revoke on unmount - objectUrls are nullified on save/serialize
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!shellRef.current) return;

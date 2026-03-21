@@ -32,10 +32,7 @@ import { auth, db } from '@/lib/firebase/config';
 import ForgeLogo from './ForgeLogo';
 import { TOOLS } from '@/lib/toolsData';
 import Footer from './Footer';
-
-function sanitizeName(name) {
-  return name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
-}
+import { sanitizeName } from '@/lib/sanitize';
 
 export default function DashboardClient() {
   const router = useRouter();

@@ -16,6 +16,7 @@ import {
   getDocs,
 } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase/config';
+import { sanitizeName } from '@/lib/sanitize';
 import dynamic from 'next/dynamic';
 
 const ForgeEditor = dynamic(() => import('./ForgeEditor'), {
@@ -26,10 +27,6 @@ const ForgeEditor = dynamic(() => import('./ForgeEditor'), {
     </main>
   ),
 });
-
-function sanitizeName(name) {
-  return name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
-}
 
 export default function EditorClientPage({ documentId }) {
   const router = useRouter();
