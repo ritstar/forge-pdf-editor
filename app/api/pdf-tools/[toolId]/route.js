@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getClientIp, takeRateLimitToken } from '@/lib/server/rate-limit';
 import { verifyUserSession } from '@/lib/server/session';
+import { backendApiSecret, backendUrl, publicBackendUrl } from '@/lib/server/pdfTools';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -24,19 +25,6 @@ const ALLOWED_TOOL_IDS = new Set([
   'pdf-to-pdfa',
   'repair-pdf',
 ]);
-
-function backendUrl() {
-  return (process.env.PDF_TOOLS_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
-}
-
-// URL the browser can reach. Defaults to the server-side URL, which is public on Render.
-function publicBackendUrl() {
-  return (process.env.PDF_TOOLS_PUBLIC_URL || backendUrl()).replace(/\/+$/, '');
-}
-
-function backendApiSecret() {
-  return (process.env.PDF_TOOLS_API_SECRET || '').trim();
-}
 
 // Must match _verify_tool_token in backend/app/main.py.
 function signToolToken({ uid, toolId, secret }) {

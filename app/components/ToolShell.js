@@ -46,6 +46,7 @@ export default function ToolShell({
   processing = 'browser',
   error,
   selectExtra,
+  notice,
   children,
 }) {
   const tool = getTool(toolId);
@@ -64,6 +65,7 @@ export default function ToolShell({
           <p>{tool.description}</p>
         </div>
         <div className="tool-landing">
+          {notice}
           <Dropzone {...dropzone} />
           <div className="tool-assurances">
             {processing === 'browser' ? (
@@ -131,6 +133,7 @@ export default function ToolShell({
           </div>
           {panel?.body ? <div className="tool-panel-body">{panel.body}</div> : null}
           <div className="tool-panel-foot">
+            {notice}
             <Alert>{error}</Alert>
             {panel?.result ? <Alert kind="success">{panel.result}</Alert> : null}
             {action ? (

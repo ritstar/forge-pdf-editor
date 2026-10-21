@@ -1,12 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { Code2, Download, Eye, EyeOff, FileText, RefreshCw, X } from 'lucide-react';
+import { Code2, Download, Eye, EyeOff, FileText, Loader2, RefreshCw, ServerCrash, X } from 'lucide-react';
 import ToolShell from './ToolShell';
 import { getTool } from '@/lib/toolsData';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
 import { downloadBlob, formatFileSize, stripExtension } from '@/app/utils/files';
+import { useBackendStatus } from '@/app/utils/useBackendStatus';
 
 const PDF_ACCEPT = 'application/pdf,.pdf';
 
@@ -120,6 +121,34 @@ function PasswordField({ id, label, value, onChange, placeholder, hint, autoComp
   );
 }
 
+function ServerNotice({ status, elapsed, compact }) {
+  if (status === 'waking') {
+    return (
+      <div className="server-notice" role="status" aria-live="polite">
+        <Loader2 size={16} className="spin" />
+        <div>
+          <strong>Waking up the conversion server…</strong>
+          <span>
+            {compact
+              ? `It was idle. Usually ready within a minute (${elapsed}s).`
+              : `It goes to sleep when idle and usually needs under a minute to start. You can choose your file now — ${elapsed}s`}
+          </span>
+        </div>
+        <div className="server-notice-bar" aria-hidden="true" />
+      </div>
+    );
+  }
+  if (status === 'unavailable') {
+    return (
+      <div className="alert alert-error" role="alert">
+        <ServerCrash size={16} />
+        <div>The conversion server isn&apos;t responding. You can still try — or refresh the page in a minute.</div>
+      </div>
+    );
+  }
+  return null;
+}
+
 export default function BackendToolClient({ toolId }) {
   const tool = getTool(toolId);
   const config = TOOL_CONFIG[toolId];
@@ -134,6 +163,8 @@ export default function BackendToolClient({ toolId }) {
   const [ownerPassword, setOwnerPassword] = useState('');
   const [compressionLevel, setCompressionLevel] = useState('medium');
   const [htmlContent, setHtmlContent] = useState('');
+  const [waitingForServer, setWaitingForServer] = useState(false);
+  const server = useBackendStatus();
 
   const reset = () => {
     setFile(null);
@@ -173,6 +204,13 @@ export default function BackendToolClient({ toolId }) {
     setResult(null);
 
     try {
+      // If the server is still booting, queue the job instead of failing.
+      if (server.status === 'checking' || server.status === 'waking') {
+        setWaitingForServer(true);
+        await server.waitUntilReady();
+        setWaitingForServer(false);
+      }
+
       const form = new FormData();
       if (file) form.append('file', file);
       if (toolId === 'protect-pdf' || toolId === 'unlock-pdf') {
@@ -213,6 +251,7 @@ export default function BackendToolClient({ toolId }) {
     } catch (err) {
       setError(err.message || 'Something went wrong while processing the file.');
     } finally {
+      setWaitingForServer(false);
       setIsProcessing(false);
     }
   };
@@ -301,6 +340,7 @@ export default function BackendToolClient({ toolId }) {
       error={error}
       onReset={reset}
       selectExtra={selectExtra}
+      notice={<ServerNotice status={server.status} elapsed={server.elapsed} compact={Boolean(file || htmlMode)} />}
       dropzone={{
         accept: config.accept,
         onFiles: handleFiles,
@@ -322,7 +362,7 @@ export default function BackendToolClient({ toolId }) {
           : null,
         action: {
           label: config.action,
-          busyLabel: config.busy,
+          busyLabel: waitingForServer ? 'Waiting for server…' : config.busy,
           onClick: runTool,
           disabled: isSubmitDisabled,
           busy: isProcessing,

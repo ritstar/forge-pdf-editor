@@ -3629,3 +3629,59 @@ input[type='radio'] {
     width: 100%;
   }
 }
+
+/* Cold-start notice for the conversion server */
+.server-notice {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px 14px;
+  margin-bottom: 16px;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  animation: fade-up 0.2s var(--ease);
+}
+
+.server-notice svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.server-notice strong {
+  display: block;
+  font-weight: 600;
+}
+
+.server-notice span {
+  color: var(--ink-2);
+}
+
+.tool-panel-foot .server-notice {
+  margin-bottom: 0;
+}
+
+.server-notice-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 35%;
+  border-radius: 3px;
+  background: var(--accent);
+  animation: indeterminate 1.4s var(--ease) infinite;
+}
+
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}

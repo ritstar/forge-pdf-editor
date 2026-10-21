@@ -21,6 +21,7 @@ import DashboardView from './DashboardView';
 import { sanitizeName } from '@/lib/sanitize';
 import { deleteBlobs, uploadToBlob } from '@/lib/blobClient';
 import { isPdfFile } from '@/app/utils/files';
+import { warmBackend } from '@/app/utils/useBackendStatus';
 
 export default function DashboardClient() {
   const router = useRouter();
@@ -72,6 +73,8 @@ export default function DashboardClient() {
 
       setUser(activeUser);
       loadDashboard(activeUser);
+      // Start waking the (free-tier, sleep-on-idle) conversion server before it's needed.
+      warmBackend();
     });
 
     return () => unsubscribe();
