@@ -1,11 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { Activity, FilePlus2, MoreHorizontal, PenLine, Search, Trash2 } from 'lucide-react';
+import { useState, useSyncExternalStore } from 'react';
+import { Activity, ChevronRight, FilePlus2, MoreHorizontal, PenLine, Search, Trash2 } from 'lucide-react';
 import Dropzone from './ui/Dropzone';
 import Menu from './ui/Menu';
-import ToolCard from './ui/ToolCard';
 import { Alert } from './ToolShell';
 import { CATEGORIES, TOOLS } from '@/lib/toolsData';
 import { formatFileSize } from '@/app/utils/files';
@@ -90,6 +89,14 @@ function DocumentRows({ documents, loading, query, onDelete, deletingDocId }) {
   );
 }
 
+const noopSubscribe = () => () => {};
+
+// The page is prerendered at build time, so the time-of-day greeting must only be computed on
+// the client; the server snapshot keeps the HTML stable and avoids a hydration mismatch.
+function useGreeting() {
+  return useSyncExternalStore(noopSubscribe, greeting, () => 'Welcome back');
+}
+
 export default function DashboardView({
   user,
   documents,
@@ -105,13 +112,14 @@ export default function DashboardView({
   onConfirmDelete,
 }) {
   const [query, setQuery] = useState('');
+  const hello = useGreeting();
   const firstName = (user?.displayName || user?.email?.split('@')[0] || '').split(' ')[0];
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h1>{greeting()}{firstName ? `, ${firstName}` : ''}</h1>
+          <h1>{hello}{firstName ? `, ${firstName}` : ''}</h1>
           <p>Edit and sign PDFs, or pick any tool to get work done.</p>
         </div>
       </div>
@@ -146,25 +154,25 @@ export default function DashboardView({
         <aside className="card" aria-labelledby="activity-title">
           <div className="card-header">
             <h2 id="activity-title">Recent activity</h2>
-            <Activity size={16} className="muted" />
+            {history.length ? <span className="badge">{history.length}</span> : <Activity size={16} className="muted" />}
           </div>
           {loading ? (
             <div className="card-body" style={{ display: 'grid', gap: 12 }}>
               {[0, 1, 2].map((n) => <div key={n} className="skeleton" style={{ height: 36 }} />)}
             </div>
           ) : history.length ? (
-            <ul className="activity-list">
+            <ul className="activity-list" tabIndex={0} aria-label="Recent activity">
               {history.map((item) => {
                 const tool = TOOLS.find((t) => t.id === item.tool_id);
                 const Icon = tool?.icon || Activity;
                 return (
                   <li key={item.id} className="activity-item">
-                    <span className="icon-tile sm" style={{ '--tile': tool?.color || 'var(--muted)' }}><Icon size={15} /></span>
-                    <div style={{ minWidth: 0 }}>
-                      <p><strong>{item.tool_name}</strong></p>
-                      <span className="small file" title={item.file_name}>{item.file_name}</span>
-                      <small>{timeAgo(item.created_at)}</small>
+                    <span className="icon-tile sm" style={{ '--tile': tool?.color || 'var(--muted)' }}><Icon size={14} /></span>
+                    <div className="activity-text">
+                      <strong>{item.tool_name}</strong>
+                      <span title={item.file_name}>{item.file_name}</span>
                     </div>
+                    <time dateTime={item.created_at}>{timeAgo(item.created_at)}</time>
                   </li>
                 );
               })}
@@ -181,17 +189,34 @@ export default function DashboardView({
         <div className="section-title">
           <h2>All tools</h2>
         </div>
-        {CATEGORIES.map((category) => {
-          const tools = TOOLS.filter((t) => t.category === category.id);
-          return (
-            <div key={category.id} className="category-block">
-              <div className="category-label"><i style={{ background: category.color }} /> {category.name}</div>
-              <div className="tool-grid">
-                {tools.map((tool) => <ToolCard key={tool.id} tool={tool} compact />)}
+        <div className="category-grid">
+          {CATEGORIES.map((category) => {
+            const tools = TOOLS.filter((t) => t.category === category.id);
+            return (
+              <div key={category.id} className="card category-card">
+                <div className="category-card-head">
+                  <i style={{ background: category.color }} />
+                  <h3>{category.name}</h3>
+                  <span>{tools.length}</span>
+                </div>
+                <ul>
+                  {tools.map((tool) => {
+                    const Icon = tool.icon;
+                    return (
+                      <li key={tool.id}>
+                        <Link href={tool.href} className="category-link" title={tool.description}>
+                          <span className="icon-tile sm" style={{ '--tile': tool.color }}><Icon size={15} /></span>
+                          <span className="category-link-text">{tool.name}</span>
+                          <ChevronRight size={15} className="category-link-arrow" />
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </section>
 
       {pendingDeleteDoc ? (

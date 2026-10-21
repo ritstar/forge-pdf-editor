@@ -50,7 +50,7 @@ export default function DashboardClient() {
           collection(db, 'tool_history'),
           where('user_id', '==', activeUser.uid),
           orderBy('created_at', 'desc'),
-          limit(10),
+          limit(30),
         )),
       ]);
       setDocuments(docsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
