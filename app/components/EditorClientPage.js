@@ -19,15 +19,28 @@ import { auth, db } from '@/lib/firebase/config';
 import { sanitizeName } from '@/lib/sanitize';
 import { deleteBlobs, uploadToBlob } from '@/lib/blobClient';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
+import { FileWarning, Loader2 } from 'lucide-react';
 
 const ForgeEditor = dynamic(() => import('./ForgeEditor'), {
   ssr: false,
-  loading: () => (
-    <main className="dashboard-page">
-      <p className="muted">Loading editor interface...</p>
-    </main>
-  ),
+  loading: () => <EditorSplash />,
 });
+
+function EditorSplash({ children }) {
+  return (
+    <main className="editor" style={{ gridTemplateRows: '1fr' }}>
+      <div className="editor-loading">
+        {children || (
+          <>
+            <Loader2 size={22} className="spin" />
+            <span>Opening editor…</span>
+          </>
+        )}
+      </div>
+    </main>
+  );
+}
 
 export default function EditorClientPage({ documentId }) {
   const router = useRouter();
@@ -233,18 +246,19 @@ export default function EditorClientPage({ documentId }) {
   }, [router]);
 
   if (loading) {
-    return (
-      <main className="dashboard-page">
-        <p className="muted">Loading editor workspace...</p>
-      </main>
-    );
+    return <EditorSplash />;
   }
 
   if (error || !documentRow || !initialPdfFile) {
     return (
-      <main className="dashboard-page">
-        <p className="error-text">{error || 'Unable to load document.'}</p>
-      </main>
+      <EditorSplash>
+        <div className="empty-state">
+          <span className="icon-tile lg" style={{ '--tile': 'var(--danger)' }}><FileWarning size={24} /></span>
+          <h3>Can&apos;t open this document</h3>
+          <p>{error || 'Unable to load document.'}</p>
+          <Link href="/app" className="btn btn-primary">Back to dashboard</Link>
+        </div>
+      </EditorSplash>
     );
   }
 

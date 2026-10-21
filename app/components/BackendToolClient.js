@@ -1,41 +1,53 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
-import { FileText, Settings, UploadCloud } from 'lucide-react';
-import { TOOLS } from '@/lib/toolsData';
+import { useState } from 'react';
+import { Code2, Download, Eye, EyeOff, FileText, RefreshCw, X } from 'lucide-react';
+import ToolShell from './ToolShell';
+import { getTool } from '@/lib/toolsData';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
 import { downloadBlob, formatFileSize, stripExtension } from '@/app/utils/files';
 
-const TOOL_ACCEPT = {
-  'compress-pdf': 'application/pdf,.pdf',
-  'pdf-to-word': 'application/pdf,.pdf',
-  'pdf-to-powerpoint': 'application/pdf,.pdf',
-  'pdf-to-excel': 'application/pdf,.pdf',
-  'word-to-pdf': '.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'powerpoint-to-pdf': '.ppt,.pptx,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'excel-to-pdf': '.xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv',
-  'html-to-pdf': '.html,.htm,text/html',
-  'unlock-pdf': 'application/pdf,.pdf',
-  'protect-pdf': 'application/pdf,.pdf',
-  'pdf-to-pdfa': 'application/pdf,.pdf',
-  'repair-pdf': 'application/pdf,.pdf',
+const PDF_ACCEPT = 'application/pdf,.pdf';
+
+const TOOL_CONFIG = {
+  'compress-pdf': { accept: PDF_ACCEPT, output: 'Compressed PDF', action: 'Compress PDF', busy: 'Compressing…' },
+  'pdf-to-word': { accept: PDF_ACCEPT, output: 'Word document (.docx)', action: 'Convert to Word', busy: 'Converting…' },
+  'pdf-to-powerpoint': { accept: PDF_ACCEPT, output: 'PowerPoint (.pptx)', action: 'Convert to PowerPoint', busy: 'Converting…' },
+  'pdf-to-excel': { accept: PDF_ACCEPT, output: 'Excel workbook (.xlsx)', action: 'Convert to Excel', busy: 'Converting…' },
+  'word-to-pdf': {
+    accept: '.doc,.docx,.odt,.rtf,.txt,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    output: 'PDF document',
+    action: 'Convert to PDF',
+    busy: 'Converting…',
+    label: 'Word document',
+  },
+  'powerpoint-to-pdf': {
+    accept: '.ppt,.pptx,.odp,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    output: 'PDF document',
+    action: 'Convert to PDF',
+    busy: 'Converting…',
+    label: 'PowerPoint file',
+  },
+  'excel-to-pdf': {
+    accept: '.xls,.xlsx,.ods,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv',
+    output: 'PDF document',
+    action: 'Convert to PDF',
+    busy: 'Converting…',
+    label: 'spreadsheet',
+  },
+  'html-to-pdf': { accept: '.html,.htm,text/html', output: 'PDF document', action: 'Convert to PDF', busy: 'Rendering…', label: 'HTML file' },
+  'unlock-pdf': { accept: PDF_ACCEPT, output: 'Unlocked PDF', action: 'Unlock PDF', busy: 'Unlocking…' },
+  'protect-pdf': { accept: PDF_ACCEPT, output: 'Password-protected PDF', action: 'Protect PDF', busy: 'Encrypting…' },
+  'pdf-to-pdfa': { accept: PDF_ACCEPT, output: 'PDF/A-2b document', action: 'Convert to PDF/A', busy: 'Converting…' },
+  'repair-pdf': { accept: PDF_ACCEPT, output: 'Repaired PDF', action: 'Repair PDF', busy: 'Repairing…' },
 };
 
-const TOOL_OUTPUT_TEXT = {
-  'compress-pdf': 'Compressed PDF',
-  'pdf-to-word': 'DOCX file',
-  'pdf-to-powerpoint': 'PPTX file',
-  'pdf-to-excel': 'XLSX file',
-  'word-to-pdf': 'PDF file',
-  'powerpoint-to-pdf': 'PDF file',
-  'excel-to-pdf': 'PDF file',
-  'html-to-pdf': 'PDF file',
-  'unlock-pdf': 'Unlocked PDF',
-  'protect-pdf': 'Protected PDF',
-  'pdf-to-pdfa': 'PDF/A file',
-  'repair-pdf': 'Repaired PDF',
-};
+const COMPRESSION_LEVELS = [
+  { value: 'low', title: 'Extreme', detail: 'Smallest file, lower image quality' },
+  { value: 'medium', title: 'Recommended', detail: 'Good quality, good compression' },
+  { value: 'high', title: 'Light', detail: 'Best quality, less compression' },
+];
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
@@ -84,62 +96,81 @@ function parseFilenameFromDisposition(headerValue, fallback) {
   return basicMatch?.[1] || fallback;
 }
 
+function PasswordField({ id, label, value, onChange, placeholder, hint, autoComplete }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="field">
+      <label className="field-label" htmlFor={id}>{label}</label>
+      <div className="input-group">
+        <input
+          id={id}
+          className="input"
+          type={visible ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          autoComplete={autoComplete}
+        />
+        <button type="button" className="btn btn-secondary btn-icon" onClick={() => setVisible((v) => !v)} aria-label={visible ? 'Hide password' : 'Show password'}>
+          {visible ? <EyeOff size={16} /> : <Eye size={16} />}
+        </button>
+      </div>
+      {hint ? <span className="field-hint">{hint}</span> : null}
+    </div>
+  );
+}
+
 export default function BackendToolClient({ toolId }) {
-  const tool = useMemo(() => TOOLS.find((t) => t.id === toolId), [toolId]);
+  const tool = getTool(toolId);
+  const config = TOOL_CONFIG[toolId];
 
   const [file, setFile] = useState(null);
-  const [dragActive, setDragActive] = useState(false);
+  const [htmlMode, setHtmlMode] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState('');
+  const [result, setResult] = useState(null);
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [ownerPassword, setOwnerPassword] = useState('');
   const [compressionLevel, setCompressionLevel] = useState('medium');
   const [htmlContent, setHtmlContent] = useState('');
 
-  const fileInputRef = useRef(null);
-
-  const needsFile = toolId !== 'html-to-pdf' || !htmlContent.trim();
-
-  const handleFile = (selectedFile) => {
+  const reset = () => {
+    setFile(null);
+    setHtmlMode(false);
     setError('');
-    setResult('');
-    if (selectedFile && selectedFile.size > MAX_UPLOAD_BYTES) {
+    setResult(null);
+    setPassword('');
+    setConfirmPassword('');
+    setOwnerPassword('');
+  };
+
+  const handleFiles = ([selectedFile]) => {
+    setError('');
+    setResult(null);
+    if (!selectedFile) return;
+    if (selectedFile.size > MAX_UPLOAD_BYTES) {
       setError('This file is larger than 50 MB. Please choose a smaller file.');
       return;
     }
-    if (selectedFile && PDF_INPUT_TOOLS.has(toolId) && selectedFile.type !== 'application/pdf' && !/\.pdf$/i.test(selectedFile.name)) {
+    if (PDF_INPUT_TOOLS.has(toolId) && selectedFile.type !== 'application/pdf' && !/\.pdf$/i.test(selectedFile.name)) {
       setError('Please choose a PDF file.');
       return;
     }
-    setFile(selectedFile || null);
+    setFile(selectedFile);
   };
 
-  const onDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') setDragActive(true);
-    if (e.type === 'dragleave') setDragActive(false);
-  };
-
-  const onDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    const dropped = e.dataTransfer.files?.[0];
-    if (dropped) handleFile(dropped);
-  };
+  const passwordMismatch = toolId === 'protect-pdf' && confirmPassword && password !== confirmPassword;
 
   const isSubmitDisabled =
     isProcessing ||
-    (!file && needsFile) ||
-    (toolId === 'protect-pdf' && !password.trim()) ||
-    (toolId === 'html-to-pdf' && !file && !htmlContent.trim());
+    (toolId === 'html-to-pdf' ? !file && !htmlContent.trim() : !file) ||
+    (toolId === 'protect-pdf' && (!password.trim() || password !== confirmPassword));
 
   const runTool = async () => {
     setIsProcessing(true);
     setError('');
-    setResult('');
+    setResult(null);
 
     try {
       const form = new FormData();
@@ -153,7 +184,7 @@ export default function BackendToolClient({ toolId }) {
       if (toolId === 'compress-pdf') {
         form.append('compression_level', compressionLevel);
       }
-      if (toolId === 'html-to-pdf') {
+      if (toolId === 'html-to-pdf' && !file) {
         form.append('html_content', htmlContent);
       }
 
@@ -173,14 +204,7 @@ export default function BackendToolClient({ toolId }) {
 
       const originalSize = Number(res.headers.get('x-original-size'));
       const outputSize = Number(res.headers.get('x-output-size'));
-      if (toolId === 'compress-pdf' && originalSize && outputSize) {
-        const saved = Math.round((1 - outputSize / originalSize) * 100);
-        setResult(saved > 0
-          ? `Reduced from ${formatFileSize(originalSize)} to ${formatFileSize(outputSize)} (${saved}% smaller).`
-          : 'This PDF is already well optimized; no further reduction was possible.');
-      } else {
-        setResult(`Done. ${filename} has been downloaded.`);
-      }
+      setResult({ blob, filename, originalSize, outputSize });
 
       const user = auth.currentUser;
       if (user && tool) {
@@ -193,164 +217,169 @@ export default function BackendToolClient({ toolId }) {
     }
   };
 
-  if (!tool) {
-    return <p className="error-text">Unknown tool.</p>;
-  }
+  const fileLabel = config.label || 'PDF';
 
-  const Icon = tool.icon;
+  const selectExtra =
+    toolId === 'html-to-pdf' ? (
+      <div style={{ marginTop: 20, textAlign: 'center' }}>
+        <button type="button" className="btn btn-secondary" onClick={() => setHtmlMode(true)}>
+          <Code2 size={16} /> Paste HTML instead
+        </button>
+      </div>
+    ) : null;
+
+  const saved = result?.originalSize && result?.outputSize ? Math.round((1 - result.outputSize / result.originalSize) * 100) : null;
+
+  const options = (
+    <>
+      {toolId === 'compress-pdf' ? (
+        <div className="field">
+          <span className="field-label">Compression level</span>
+          <div className="option-list" role="group" aria-label="Compression level">
+            {COMPRESSION_LEVELS.map((level) => (
+              <button
+                key={level.value}
+                type="button"
+                className="option-card"
+                aria-pressed={compressionLevel === level.value}
+                onClick={() => setCompressionLevel(level.value)}
+              >
+                <span className="option-dot" />
+                <span>
+                  <strong>{level.title}</strong>
+                  <span>{level.detail}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {toolId === 'unlock-pdf' ? (
+        <PasswordField
+          id="unlock-password"
+          label="Document password"
+          value={password}
+          onChange={setPassword}
+          placeholder="Enter the PDF's password"
+          hint="Leave empty if the PDF only restricts printing or editing."
+          autoComplete="current-password"
+        />
+      ) : null}
+
+      {toolId === 'protect-pdf' ? (
+        <>
+          <PasswordField id="protect-password" label="Password" value={password} onChange={setPassword} placeholder="Required to open the PDF" autoComplete="new-password" />
+          <PasswordField id="protect-confirm" label="Confirm password" value={confirmPassword} onChange={setConfirmPassword} placeholder="Repeat the password" autoComplete="new-password" />
+          {passwordMismatch ? <span className="error-text">Passwords don&apos;t match.</span> : null}
+          <PasswordField
+            id="protect-owner"
+            label="Owner password (optional)"
+            value={ownerPassword}
+            onChange={setOwnerPassword}
+            placeholder="Defaults to the password above"
+            hint="Encrypted with AES-256."
+            autoComplete="new-password"
+          />
+        </>
+      ) : null}
+
+      {!['compress-pdf', 'unlock-pdf', 'protect-pdf'].includes(toolId) ? (
+        <div className="summary-list">
+          <div><span>Output</span><strong>{config.output}</strong></div>
+          <div><span>Max size</span><strong>50 MB</strong></div>
+        </div>
+      ) : null}
+    </>
+  );
 
   return (
-    <div style={{ maxWidth: '860px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      <div style={{ textAlign: 'center', marginBottom: '8px' }}>
-        <h1 style={{ fontSize: '2.3rem', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-          <span
-            style={{
-              color: tool.color,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: `${tool.color}15`,
-              padding: '12px',
-              borderRadius: '12px',
-            }}
-          >
-            <Icon size={30} />
-          </span>
-          {tool.name}
-        </h1>
-        <p className="muted" style={{ fontSize: '1.05rem' }}>{tool.description}</p>
-      </div>
-
-      <div style={{ display: 'grid', gap: '18px', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))' }}>
-        <div
-          onDragEnter={onDrag}
-          onDragOver={onDrag}
-          onDragLeave={onDrag}
-          onDrop={onDrop}
-          onClick={() => fileInputRef.current?.click()}
-          style={{
-            border: `2px dashed ${dragActive ? 'var(--accent)' : 'var(--line)'}`,
-            borderRadius: '16px',
-            padding: '50px 18px',
-            background: dragActive ? 'var(--surface)' : 'var(--bg-soft)',
-            transition: 'all 0.2s ease',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            alignItems: 'center',
-            gap: '12px',
-            textAlign: 'center',
-            cursor: 'pointer',
-            minHeight: '280px',
-          }}
-        >
-          <div style={{ background: 'var(--surface)', padding: '16px', borderRadius: '50%', boxShadow: 'var(--shadow)' }}>
-            <UploadCloud size={36} color="var(--accent)" />
+    <ToolShell
+      toolId={toolId}
+      stage={file || htmlMode ? 'work' : 'select'}
+      processing="server"
+      error={error}
+      onReset={reset}
+      selectExtra={selectExtra}
+      dropzone={{
+        accept: config.accept,
+        onFiles: handleFiles,
+        title: `Select a ${fileLabel}`,
+        hint: `or drop it here · up to 50 MB`,
+        icon: FileText,
+      }}
+      workspaceTitle={file ? 'Selected file' : 'HTML source'}
+      workspaceSubtitle={file ? null : 'Inline styles and data: images are supported; external resources are blocked.'}
+      panel={{
+        subtitle: `Output: ${config.output}`,
+        body: options,
+        result: result
+          ? toolId === 'compress-pdf' && saved !== null
+            ? saved > 0
+              ? `Saved ${saved}% — ${formatFileSize(result.originalSize)} → ${formatFileSize(result.outputSize)}.`
+              : 'This PDF is already well optimized; no further reduction was possible.'
+            : `${result.filename} downloaded.`
+          : null,
+        action: {
+          label: config.action,
+          busyLabel: config.busy,
+          onClick: runTool,
+          disabled: isSubmitDisabled,
+          busy: isProcessing,
+        },
+        footnote: 'Files are deleted from our servers right after processing.',
+      }}
+    >
+      {file ? (
+        <div className="file-list">
+          <div className="file-item">
+            <span className="doc-icon">{(file.name.split('.').pop() || 'FILE').slice(0, 4).toUpperCase()}</span>
+            <div className="file-item-body">
+              <strong>{file.name}</strong>
+              <span>{formatFileSize(file.size)}</span>
+            </div>
+            <div className="file-item-actions">
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={reset} aria-label="Remove file" disabled={isProcessing}>
+                <X size={16} />
+              </button>
+            </div>
           </div>
-          <h3 style={{ margin: 0 }}>{file ? 'File selected' : 'Select file'}</h3>
-          <p className="muted" style={{ margin: 0 }}>
-            {file ? `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)` : 'Drop file here or click to browse'}
-          </p>
-          <p className="muted small" style={{ margin: 0 }}>Output: {TOOL_OUTPUT_TEXT[toolId] || 'Converted file'}</p>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={TOOL_ACCEPT[toolId] || '*'}
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const selected = e.target.files?.[0];
-              if (selected) handleFile(selected);
-              e.target.value = '';
-            }}
-          />
         </div>
+      ) : (
+        <textarea
+          className="textarea"
+          rows={16}
+          value={htmlContent}
+          onChange={(e) => setHtmlContent(e.target.value)}
+          placeholder={'<html>\n  <body>\n    <h1>Hello</h1>\n  </body>\n</html>'}
+          style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.85rem' }}
+          aria-label="HTML content"
+        />
+      )}
 
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '12px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Settings size={16} /> Options
-          </h3>
-
-          {toolId === 'compress-pdf' ? (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              Compression Level
-              <select className="field" value={compressionLevel} onChange={(e) => setCompressionLevel(e.target.value)}>
-                <option value="low">Extreme (smallest file, lower quality)</option>
-                <option value="medium">Recommended (good quality, good compression)</option>
-                <option value="high">Less compression (best quality)</option>
-              </select>
-            </label>
+      {result ? (
+        <div className="card result-card" style={{ marginTop: 16 }}>
+          <span className="icon-tile lg"><Download size={24} /></span>
+          <div>
+            <h3>Your file is ready</h3>
+            <p>{result.filename}</p>
+          </div>
+          {toolId === 'compress-pdf' && saved > 0 ? (
+            <div style={{ width: 'min(320px, 100%)', display: 'grid', gap: 6 }}>
+              <div className="meter"><span style={{ width: `${100 - saved}%` }} /></div>
+              <span className="small muted">{formatFileSize(result.outputSize)} of {formatFileSize(result.originalSize)}</span>
+            </div>
           ) : null}
-
-          {toolId === 'unlock-pdf' ? (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              Current PDF Password (if needed)
-              <input
-                className="field"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Leave empty if not password protected"
-              />
-            </label>
-          ) : null}
-
-          {toolId === 'protect-pdf' ? (
-            <>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                Open Password
-                <input
-                  className="field"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Required"
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                Owner Password (optional)
-                <input
-                  className="field"
-                  type="password"
-                  value={ownerPassword}
-                  onChange={(e) => setOwnerPassword(e.target.value)}
-                  placeholder="Defaults to open password"
-                />
-              </label>
-            </>
-          ) : null}
-
-          {toolId === 'html-to-pdf' ? (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              HTML Content (optional if HTML file uploaded)
-              <textarea
-                className="field"
-                rows={8}
-                value={htmlContent}
-                onChange={(e) => setHtmlContent(e.target.value)}
-                placeholder="<html><body><h1>Hello</h1></body></html>"
-              />
-            </label>
-          ) : null}
-
-          {error ? <p className="error-text" style={{ margin: 0 }}>{error}</p> : null}
-          {result ? <p className="muted" role="status" style={{ margin: 0 }}>{result}</p> : null}
-
-          <button
-            className="primary-btn"
-            type="button"
-            onClick={runTool}
-            disabled={isSubmitDisabled}
-            style={{ opacity: isSubmitDisabled ? 0.6 : 1 }}
-          >
-            {isProcessing ? 'Processing...' : `Run ${tool.name}`}
-          </button>
+          <div className="toolbar" style={{ flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button type="button" className="btn btn-primary" onClick={() => downloadBlob(result.blob, result.filename)}>
+              <Download size={16} /> Download again
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={reset}>
+              <RefreshCw size={16} /> Process another file
+            </button>
+          </div>
         </div>
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--muted)', fontSize: '0.92rem' }}>
-        <FileText size={15} />
-        <span>Processing runs on the Dockerized Python backend.</span>
-      </div>
-    </div>
+      ) : null}
+    </ToolShell>
   );
 }

@@ -1,134 +1,198 @@
-'use client';
-
 import Link from 'next/link';
-import { FileText, Lock, Moon, Sparkles, Sun } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '@/lib/firebase/config';
-import ForgeLogo from './components/ForgeLogo';
-import LandingFooter from './components/LandingFooter';
+import {
+  ArrowRight,
+  Check,
+  CloudOff,
+  FileSignature,
+  Gauge,
+  Image as ImageIcon,
+  PenLine,
+  ShieldCheck,
+  Type,
+} from 'lucide-react';
+import SiteHeader from './components/SiteHeader';
+import SiteFooter from './components/SiteFooter';
+import ToolCatalog from './components/ToolCatalog';
 import { TOOLS } from '@/lib/toolsData';
-import { useTheme } from './utils/useTheme';
 
-export default function LandingPage() {
-  const [theme, toggleTheme] = useTheme();
-  const [user, setUser] = useState(null);
-  const [authChecking, setAuthChecking] = useState(() => Boolean(auth));
-  const availableTools = TOOLS;
-
-  useEffect(() => {
-    if (!auth) {
-      return undefined;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setAuthChecking(false);
-    }, 2500);
-
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setAuthChecking(false);
-      window.clearTimeout(timeoutId);
-    });
-
-    return () => {
-      window.clearTimeout(timeoutId);
-      unsubscribe();
-    };
-  }, []);
-
+function ProductMock() {
   return (
-    <main className="landing-page">
-      <header className="landing-nav">
-        <ForgeLogo href="/" />
-        <div className="landing-nav-actions">
-          <button
-            type="button"
-            className="ghost-btn theme-toggle"
-            onClick={toggleTheme}
-            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-            <span className="theme-toggle-label">
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </span>
-          </button>
-          {!authChecking && user ? (
-            <Link href="/app" className="primary-btn">Go to Dashboard</Link>
-          ) : (
-            <>
-              <Link href="/login" className="ghost-btn" style={{ visibility: authChecking ? 'hidden' : 'visible' }}>Login</Link>
-              <Link href="/signup" className="primary-btn" style={{ visibility: authChecking ? 'hidden' : 'visible' }}>Sign up</Link>
-            </>
-          )}
-        </div>
-      </header>
-
-      <section className="landing-hero">
-        <div>
-          <p className="eyebrow">The complete PDF toolkit</p>
-          <h2>Every tool you need to use PDFs, at your fingertips.</h2>
-          <p>
-            Merge, split, compress, convert, rotate, unlock and watermark PDFs with just a few clicks.
-            All tools are 100% free and easy to use.
-          </p>
-          <div className="landing-cta">
-            {!authChecking && user ? (
-               <Link href="/app" className="primary-btn">Go to Dashboard</Link>
-            ) : (
-              <>
-                <Link href="/signup" className="primary-btn" style={{ visibility: authChecking ? 'hidden' : 'visible' }}>Start Free</Link>
-                <Link href="/login" className="ghost-btn" style={{ visibility: authChecking ? 'hidden' : 'visible' }}>I already have an account</Link>
-              </>
-            )}
+    <div style={{ position: 'relative' }}>
+      <div className="mock-window" aria-hidden="true">
+        <div className="mock-bar">
+          <div className="mock-dots"><i /><i /><i /></div>
+          <span className="mock-title">Service Agreement.pdf</span>
+          <div className="mock-tools">
+            <span><Type size={14} /></span>
+            <span><ImageIcon size={14} /></span>
+            <span className="on"><PenLine size={14} /></span>
           </div>
         </div>
-        <div className="hero-panel">
-          <h3>Everything you need in one workflow</h3>
-          <ul>
-            <li><FileText size={16} /> Edit PDFs with text, images, and signatures</li>
-            <li><Sparkles size={16} /> Resume PDF drafts anytime from your dashboard</li>
-            <li><Lock size={16} /> Private, user-scoped document storage</li>
-          </ul>
+        <div className="mock-body">
+          <div className="mock-rail">
+            {[0, 1, 2].map((n) => (
+              <div key={n} className={`mock-thumb ${n === 0 ? 'on' : ''}`}>
+                <i style={{ width: '70%' }} /><i /><i /><i style={{ width: '60%' }} />
+              </div>
+            ))}
+          </div>
+          <div className="mock-canvas">
+            <div className="mock-page">
+              <b />
+              {[92, 100, 86, 97, 74, 100, 90, 64].map((w, i) => <i key={i} style={{ width: `${w}%` }} />)}
+              <div className="mock-sign">A. Morgan</div>
+              <div className="mock-field">Oct 21, 2026</div>
+            </div>
+          </div>
         </div>
-      </section>
+      </div>
+      <div className="mock-float one">
+        <span className="icon-tile sm" style={{ '--tile': 'var(--success)' }}><Check size={16} /></span>
+        <span>Draft saved<small>Autosaved just now</small></span>
+      </div>
+      <div className="mock-float two">
+        <span className="icon-tile sm" style={{ '--tile': 'var(--cat-edit)' }}><FileSignature size={16} /></span>
+        <span>Signature added<small>Reusable across documents</small></span>
+      </div>
+    </div>
+  );
+}
 
-      <section className="tools-grid-wrapper" style={{ marginTop: '40px', marginBottom: '60px' }}>
-        <h2 style={{ textAlign: 'center', marginBottom: '30px', fontSize: '2rem', letterSpacing: '-0.02em' }}>Explore All PDF Tools</h2>
-        <div className="landing-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-          {availableTools.map((tool) => {
-            const Icon = tool.icon;
-            return (
-              <Link
-                href={tool.href}
-                key={tool.id}
-                className="landing-card"
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  textDecoration: 'none',
-                  transition: 'transform 0.2s, box-shadow 0.2s',
-                  cursor: 'pointer'
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = 'var(--shadow)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = ''; }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '14px' }}>
-                  <div style={{ color: tool.color, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${tool.color}15`, padding: '12px', borderRadius: '12px' }}>
-                    <Icon size={26} />
-                  </div>
-                  <h3 style={{ margin: 0, fontSize: '1.25rem', color: 'var(--ink)' }}>{tool.name}</h3>
-                </div>
-                <p className="muted" style={{ margin: 0, fontSize: '0.95rem', lineHeight: '1.5' }}>
-                  {tool.description}
-                </p>
+const FEATURES = [
+  {
+    icon: PenLine,
+    color: 'var(--cat-edit)',
+    title: 'Edit and sign in minutes',
+    body: 'Place text, images and saved signatures anywhere on the page, fill in PDF forms, and pick up where you left off with autosaved drafts.',
+  },
+  {
+    icon: CloudOff,
+    color: 'var(--success)',
+    title: 'Private by default',
+    body: 'Merge, split, rotate, watermark and image tools run entirely in your browser — your files never leave your device.',
+  },
+  {
+    icon: Gauge,
+    color: 'var(--cat-convert-to)',
+    title: 'Fast and precise',
+    body: 'Real compression that never makes files bigger, layout-aware Office conversion and table extraction to Excel.',
+  },
+];
+
+export default function LandingPage() {
+  const toolCount = TOOLS.length;
+
+  return (
+    <>
+      <SiteHeader />
+      <main>
+        <section className="hero">
+          <div className="container hero-grid">
+            <div>
+              <Link href="#tools" className="pill-link">
+                <span className="badge badge-accent">{toolCount} tools</span>
+                Everything for PDFs in one place <ArrowRight size={14} />
               </Link>
-            );
-          })}
-        </div>
-      </section>
+              <h1>
+                The PDF toolkit that <em>just works</em>.
+              </h1>
+              <p className="hero-lead">
+                Edit, sign, convert, compress and organize PDFs right in your browser. No installs, no watermarks,
+                and your work is saved as you go.
+              </p>
+              <div className="hero-actions">
+                <Link href="/signup" className="btn btn-primary btn-lg">
+                  Get started — it&apos;s free <ArrowRight size={17} />
+                </Link>
+                <Link href="#tools" className="btn btn-secondary btn-lg">Browse tools</Link>
+              </div>
+              <div className="hero-trust">
+                <span><Check size={15} /> Free to use</span>
+                <span><Check size={15} /> No watermarks</span>
+                <span><Check size={15} /> Works on any device</span>
+              </div>
+            </div>
+            <ProductMock />
+          </div>
+        </section>
 
-      <LandingFooter />
-    </main>
+        <section className="container" aria-label="Highlights">
+          <div className="stat-strip">
+            <div><strong>{toolCount}</strong><span>PDF tools in one workspace</span></div>
+            <div><strong>AES-256</strong><span>Password protection</span></div>
+            <div><strong>50 MB</strong><span>Maximum file size</span></div>
+            <div><strong>0</strong><span>Watermarks on your files</span></div>
+          </div>
+        </section>
+
+        <section className="section" id="tools">
+          <div className="container">
+            <div className="section-head">
+              <span className="eyebrow">Tools</span>
+              <h2>Every PDF tool you need</h2>
+              <p>Pick a tool to get started. Your files are handled securely and deleted after processing.</p>
+            </div>
+            <ToolCatalog />
+          </div>
+        </section>
+
+        <section className="section" id="features" style={{ paddingTop: 24 }}>
+          <div className="container">
+            <div className="section-head">
+              <span className="eyebrow">Why Forge</span>
+              <h2>Built for real document work</h2>
+            </div>
+            <div className="feature-grid">
+              {FEATURES.map(({ icon: Icon, color, title, body }) => (
+                <article key={title} className="feature">
+                  <span className="icon-tile" style={{ '--tile': color }}><Icon size={20} /></span>
+                  <h3>{title}</h3>
+                  <p>{body}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="section" style={{ paddingTop: 24 }}>
+          <div className="container">
+            <div className="section-head">
+              <span className="eyebrow">How it works</span>
+              <h2>Three steps, no learning curve</h2>
+            </div>
+            <div className="steps">
+              <div className="step">
+                <h3>Upload your PDF</h3>
+                <p>Drop a file or pick one from your device. Large documents up to 50 MB are supported.</p>
+              </div>
+              <div className="step">
+                <h3>Edit, convert or organize</h3>
+                <p>Use the editor or any tool. Undo anything with <span className="kbd">⌘Z</span> — drafts autosave as you work.</p>
+              </div>
+              <div className="step">
+                <h3>Download the result</h3>
+                <p>Get a clean, standards-compliant PDF instantly, ready to send or archive.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="container">
+          <div className="cta-band">
+            <div>
+              <h2>Start working with your PDFs</h2>
+              <p>Create a free account to save drafts and reusable signatures.</p>
+            </div>
+            <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+              <Link href="/signup" className="btn btn-primary btn-lg">Create free account <ArrowRight size={17} /></Link>
+            </div>
+          </div>
+          <p className="small muted" style={{ marginTop: 16, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'center' }}>
+            <ShieldCheck size={15} /> Secure sign-in with Google or email · your documents stay private to your account
+          </p>
+        </section>
+      </main>
+      <SiteFooter />
+    </>
   );
 }

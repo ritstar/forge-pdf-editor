@@ -26,6 +26,10 @@ const csp = [
 ].join('; ');
 
 const nextConfig = {
+  // Pin the project root so a stray lockfile in a parent directory can't change resolution.
+  turbopack: {
+    root: import.meta.dirname,
+  },
   async headers() {
     const headers = [
       { key: 'X-Content-Type-Options', value: 'nosniff' },

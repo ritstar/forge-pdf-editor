@@ -2,24 +2,39 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
+  Bold,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
   Download,
   Eraser,
   FileImage,
   ImagePlus,
+  Layers,
+  Loader2,
   LogOut,
-  Move,
-  RotateCcw,
-  RotateCw,
+  Maximize,
+  MoreHorizontal,
+  PanelLeft,
+  Plus,
+  Redo2,
   Save,
   Signature,
+  SlidersHorizontal,
   Trash2,
   Type,
   Undo2,
-  User,
+  Upload,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import { Document, Page } from 'react-pdf';
+import LazyPage from './ui/LazyPage';
+import Menu from './ui/Menu';
 import '../utils/pdfWorker';
 import { convertPdfToImage } from '../utils/pdfToImage';
 import { removeWhiteBackground } from '../utils/imageProcessing';
@@ -188,6 +203,9 @@ export default function ForgeEditor({
   const [editingId, setEditingId] = useState(null);
   const [zoom, setZoom] = useState(initialDraft?.zoom || 1);
   const [busy, setBusy] = useState(false);
+  const [leftTab, setLeftTab] = useState('pages');
+  const [leftOpen, setLeftOpen] = useState(false);
+  const [rightOpen, setRightOpen] = useState(false);
   const [historyFlags, setHistoryFlags] = useState({ canUndo: false, canRedo: false });
   const [renderSize, setRenderSize] = useState({ width: 680, height: 900 });
   const [containerWidth, setContainerWidth] = useState(980);
@@ -356,13 +374,14 @@ export default function ForgeEditor({
   }, []);
 
   useEffect(() => {
-    if (!shellRef.current) return;
+    // The canvas mounts only after the PDF loads, so re-run when the page count arrives.
+    if (!shellRef.current) return undefined;
     const observer = new ResizeObserver(([entry]) => {
       setContainerWidth(entry.contentRect.width);
     });
     observer.observe(shellRef.current);
     return () => observer.disconnect();
-  }, []);
+  }, [numPages]);
 
   useEffect(() => {
     const onMove = (event) => {
@@ -450,6 +469,11 @@ export default function ForgeEditor({
 
   useEffect(() => {
     const onKeyDown = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        saveDraftNowRef.current();
+        return;
+      }
       if (isEditableTarget(event.target)) return;
 
       const key = event.key.toLowerCase();
@@ -847,345 +871,468 @@ export default function ForgeEditor({
     });
 
   const hasElements = elements.length > 0;
-  // Fit the page to the available width (minus .canvas-scroll padding), then apply zoom.
-  // Clamping after zooming made zoom-in a no-op on wide screens.
-  const fitWidth = clamp(containerWidth - 32, 280, 980);
+  // Fit the page to the available canvas width (minus padding), then apply zoom.
+  const canvasPadding = containerWidth < 640 ? 24 : 64;
+  const fitWidth = clamp(containerWidth - canvasPadding, 280, 900);
   const targetWidth = Math.floor(fitWidth * zoom);
+  const countByPage = elements.reduce((acc, item) => {
+    acc[item.pageIndex] = (acc[item.pageIndex] || 0) + 1;
+    return acc;
+  }, {});
+
+  const goToPage = (page) => {
+    setCurrentPage(clamp(page, 1, numPages || 1));
+    setSelectedId(null);
+    setEditingId(null);
+    setLeftOpen(false);
+  };
+
+  const openSignatures = () => {
+    setLeftTab('signatures');
+    setLeftOpen(true);
+  };
+
+  const saveLabel = {
+    saved: 'Saved',
+    saving: 'Saving…',
+    dirty: 'Unsaved changes',
+    error: 'Save failed — retry',
+  }[saveStatus];
+
+  const TEXT_COLORS = ['#111827', '#1d4ed8', '#b91c1c', '#047857'];
 
   return (
-    <main className="app-shell">
-      <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={handleImageInput} />
-      <input ref={signatureInputRef} type="file" accept="image/*" hidden onChange={handleSignatureInput} />
+    <div className="editor">
+      <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleImageInput} />
+      <input ref={signatureInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleSignatureInput} />
 
-      <section className="hero app-hero-row">
-        <div>
-          <h1>{documentTitle}</h1>
-          <p>
-            Signed in as {userEmail}. Draft status: <strong>{saveStatus}</strong>
-          </p>
-          {saveError ? <p className="error-text">{saveError}</p> : null}
-        </div>
-        <div className="stack">
-          <button className="ghost-btn" onClick={leaveAfterSave(onBackToDashboard)}>Back to Dashboard</button>
-          <button className="ghost-btn" onClick={saveDraftNow}>
-            <Save size={16} /> Save Now
+      <header className="editor-bar">
+        <div className="editor-bar-left">
+          <button type="button" className="btn btn-ghost btn-icon" onClick={leaveAfterSave(onBackToDashboard)} aria-label="Back to dashboard" title="Back to dashboard">
+            <ArrowLeft size={18} />
           </button>
-          <button className="ghost-btn" onClick={leaveAfterSave(onSignOut)}>
-            <LogOut size={16} /> Sign Out
+          <button type="button" className="btn btn-ghost btn-icon drawer-only" onClick={() => setLeftOpen((v) => !v)} aria-label="Pages and signatures">
+            <PanelLeft size={18} />
           </button>
-        </div>
-      </section>
-
-      <section className="workspace" onPointerDown={() => setSelectedId(null)}>
-        <div className="topbar">
-          <div className="file-info">
-            <h3>{documentTitle}</h3>
-            <span>
-              Page {currentPage} / {numPages || '--'}
-            </span>
-          </div>
-
-          <div className="topbar-actions">
-            <button className="ghost-btn" onClick={undo} disabled={!historyFlags.canUndo}>
-              <Undo2 size={16} /> Undo
-            </button>
-            <button className="ghost-btn" onClick={redo} disabled={!historyFlags.canRedo}>
-              <RotateCw size={16} /> Redo
-            </button>
-            <button className="ghost-btn" onClick={() => setZoom(1)}>
-              <RotateCcw size={16} /> Reset Zoom
+          <div className="editor-title">
+            <h1 title={documentTitle}>{documentTitle}</h1>
+            <button
+              type="button"
+              className={`save-state ${saveStatus}`}
+              onClick={saveStatus === 'error' || saveStatus === 'dirty' ? saveDraftNow : undefined}
+              title={saveError || 'Changes are saved automatically'}
+            >
+              {saveStatus === 'saving' ? <Loader2 size={12} className="spin" /> : saveStatus === 'saved' ? <Check size={12} /> : <span className="status-dot" />}
+              {saveLabel}
             </button>
           </div>
         </div>
 
-        <div className="tool-row">
-          <button className="action-btn" onClick={addText}>
-            <Type size={16} /> Add Text
+        <div className="editor-bar-center">
+          <div className="tool-group" role="toolbar" aria-label="Insert">
+            <button type="button" className="btn btn-ghost" onClick={addText} title="Add text">
+              <Type size={16} /> <span className="hide-sm">Text</span>
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => imageInputRef.current?.click()} disabled={busy} title="Add image">
+              <ImagePlus size={16} /> <span className="hide-sm">Image</span>
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={openSignatures} disabled={busy} title="Add signature">
+              <Signature size={16} /> <span className="hide-sm">Sign</span>
+            </button>
+          </div>
+          <span className="bar-sep" />
+          <button type="button" className="btn btn-ghost btn-icon" onClick={undo} disabled={!historyFlags.canUndo} aria-label="Undo" title="Undo (⌘Z)">
+            <Undo2 size={17} />
           </button>
-          <button className="action-btn" onClick={() => imageInputRef.current?.click()} disabled={busy}>
-            <ImagePlus size={16} /> Add Image
+          <button type="button" className="btn btn-ghost btn-icon" onClick={redo} disabled={!historyFlags.canRedo} aria-label="Redo" title="Redo (⇧⌘Z)">
+            <Redo2 size={17} />
           </button>
-          <button className="action-btn" onClick={() => signatureInputRef.current?.click()} disabled={busy}>
-            <Signature size={16} /> New Signature
-          </button>
-          <div className="zoom-box">
-            <button className="ghost-btn" onClick={() => setZoom((z) => clamp(z - 0.1, 0.6, 1.8))}>
+        </div>
+
+        <div className="editor-bar-right">
+          <div className="zoom-control hide-sm">
+            <button type="button" className="btn btn-ghost btn-icon" onClick={() => setZoom((z) => clamp(Math.round((z - 0.1) * 10) / 10, 0.5, 2))} aria-label="Zoom out">
               <ZoomOut size={16} />
             </button>
             <span>{Math.round(zoom * 100)}%</span>
-            <button className="ghost-btn" onClick={() => setZoom((z) => clamp(z + 0.1, 0.6, 1.8))}>
+            <button type="button" className="btn btn-ghost btn-icon" onClick={() => setZoom((z) => clamp(Math.round((z + 0.1) * 10) / 10, 0.5, 2))} aria-label="Zoom in">
               <ZoomIn size={16} />
             </button>
+            <button type="button" className="btn btn-ghost btn-icon" onClick={() => setZoom(1)} aria-label="Fit to width" title="Fit to width">
+              <Maximize size={15} />
+            </button>
           </div>
-          <button className="danger-btn" onClick={clearPage} disabled={!pageElements.length}>
-            <Eraser size={16} /> Clear Page
-          </button>
-          <button className="danger-btn" onClick={clearAll} disabled={!hasElements}>
-            <Trash2 size={16} /> Clear All
+
+          <Menu
+            trigger={({ toggle, ...aria }) => (
+              <button type="button" className="btn btn-primary" onClick={toggle} disabled={busy} {...aria}>
+                {busy ? <Loader2 size={16} className="spin" /> : <Download size={16} />}
+                <span className="hide-sm">Download</span>
+                <ChevronDown size={15} />
+              </button>
+            )}
+          >
+            <div className="menu-label">Export</div>
+            <button type="button" role="menuitem" className="menu-item" onClick={exportPdf}>
+              <Download size={16} /> PDF document
+            </button>
+            <button type="button" role="menuitem" className="menu-item" onClick={() => exportImage('png')}>
+              <FileImage size={16} /> PNG image <small>page {currentPage}</small>
+            </button>
+            <button type="button" role="menuitem" className="menu-item" onClick={() => exportImage('jpeg')}>
+              <FileImage size={16} /> JPG image <small>page {currentPage}</small>
+            </button>
+          </Menu>
+
+          <Menu
+            trigger={({ toggle, ...aria }) => (
+              <button type="button" className="btn btn-ghost btn-icon" onClick={toggle} aria-label="More options" {...aria}>
+                <MoreHorizontal size={18} />
+              </button>
+            )}
+          >
+            <button type="button" role="menuitem" className="menu-item" onClick={saveDraftNow}>
+              <Save size={16} /> Save now
+            </button>
+            <div className="menu-sep" />
+            <button type="button" role="menuitem" className="menu-item" onClick={clearPage} disabled={!pageElements.length}>
+              <Eraser size={16} /> Clear this page
+            </button>
+            <button type="button" role="menuitem" className="menu-item danger" onClick={clearAll} disabled={!hasElements}>
+              <Trash2 size={16} /> Remove all edits
+            </button>
+            <div className="menu-sep" />
+            <button type="button" role="menuitem" className="menu-item" onClick={leaveAfterSave(onSignOut)}>
+              <LogOut size={16} /> Sign out
+            </button>
+          </Menu>
+
+          <button type="button" className="btn btn-ghost btn-icon drawer-only" onClick={() => setRightOpen((v) => !v)} aria-label="Properties">
+            <SlidersHorizontal size={18} />
           </button>
         </div>
+      </header>
 
-        <div className="content-grid">
-          <aside className="left-panel">
-            <div className="panel-section">
-              <h4>Pages</h4>
-              <div className="page-nav">
-                <button
-                  className="ghost-btn"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Previous
-                </button>
-                <button
-                  className="ghost-btn"
-                  onClick={() => setCurrentPage((p) => Math.min(numPages || 1, p + 1))}
-                  disabled={currentPage >= numPages}
-                >
-                  Next
-                </button>
+      <Document
+        file={pdfFile}
+        className="editor-body"
+        onLoadSuccess={({ numPages: loaded }) => {
+          setNumPages(loaded);
+          setCurrentPage((prev) => clamp(prev, 1, loaded));
+        }}
+        loading={
+          <div className="editor-loading">
+            <Loader2 size={22} className="spin" />
+            <span>Opening document…</span>
+          </div>
+        }
+        error={<div className="editor-loading">This PDF could not be opened.</div>}
+      >
+        <div className={`drawer-backdrop ${leftOpen || rightOpen ? 'is-open' : ''}`} onClick={() => { setLeftOpen(false); setRightOpen(false); }} />
+
+        <aside className={`editor-rail ${leftOpen ? 'is-open' : ''}`} aria-label="Pages and signatures">
+          <div className="panel-tabs" role="tablist">
+            <button type="button" role="tab" className="panel-tab" aria-selected={leftTab === 'pages'} onClick={() => setLeftTab('pages')}>
+              Pages
+            </button>
+            <button type="button" role="tab" className="panel-tab" aria-selected={leftTab === 'signatures'} onClick={() => setLeftTab('signatures')}>
+              Signatures
+            </button>
+          </div>
+
+          <div className="panel-scroll">
+            {leftTab === 'pages' ? (
+              <div className="thumb-list">
+                {Array.from({ length: numPages }, (_, i) => i + 1).map((n) => (
+                  <button key={n} type="button" className="thumb" aria-current={n === currentPage} onClick={() => goToPage(n)}>
+                    <span className="thumb-sheet">
+                      <LazyPage pageNumber={n} width={150} />
+                      {countByPage[n - 1] ? <span className="badge badge-accent thumb-count">{countByPage[n - 1]}</span> : null}
+                    </span>
+                    <span>{n}</span>
+                  </button>
+                ))}
               </div>
-              <input
-                type="range"
-                min={1}
-                max={Math.max(1, numPages)}
-                value={currentPage}
-                disabled={numPages <= 1}
-                onChange={(event) => setCurrentPage(Number(event.target.value))}
-              />
-            </div>
-
-            <div className="panel-section">
-              <h4>Saved Signatures</h4>
-              <label className="field-label" htmlFor="signature-name">Name for new upload</label>
-              <input
-                id="signature-name"
-                className="field"
-                value={signatureName}
-                onChange={(event) => setSignatureName(event.target.value)}
-                placeholder="e.g. Ritesh Personal"
-              />
-              <div className="signature-list">
+            ) : (
+              <div className="panel-section panel-stack">
+                <div className="field">
+                  <label className="field-label" htmlFor="signature-name">New signature</label>
+                  <input
+                    id="signature-name"
+                    className="input"
+                    value={signatureName}
+                    onChange={(event) => setSignatureName(event.target.value)}
+                    placeholder="Name (optional)"
+                  />
+                  <span className="field-hint">Upload a photo or scan; white backgrounds are removed automatically.</span>
+                </div>
+                <button type="button" className="btn btn-secondary btn-block" onClick={() => signatureInputRef.current?.click()} disabled={busy}>
+                  <Upload size={16} /> Upload signature
+                </button>
+                <div className="divider" />
                 {signatures.length ? (
-                  signatures.map((signature) => (
-                    <div className="signature-row" key={signature.id}>
-                      <button className="ghost-btn signature-preview" onClick={() => addSavedSignature(signature)}>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={signature.url} alt={signature.name || 'Signature'} />
-                        <span>{signature.name || 'Saved signature'}</span>
-                      </button>
-                      <button
-                        className="danger-btn"
-                        onClick={async () => {
-                          try {
-                            await onDeleteSignature(signature);
-                            setSaveError('');
-                          } catch (error) {
-                            setSaveError(error.message || 'Failed to delete signature.');
-                          }
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  ))
+                  <div className="sig-grid">
+                    {signatures.map((signature) => (
+                      <div key={signature.id} className="sig-item">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            addSavedSignature(signature);
+                            setLeftOpen(false);
+                          }}
+                          style={{ display: 'grid', gap: 4, padding: 0, border: 0, background: 'none', textAlign: 'left' }}
+                          title="Place on current page"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={signature.url} alt={signature.name || 'Signature'} />
+                          <span>{signature.name || 'Saved signature'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="tile-btn danger"
+                          aria-label={`Delete ${signature.name || 'signature'}`}
+                          onClick={async () => {
+                            try {
+                              await onDeleteSignature(signature);
+                              setSaveError('');
+                            } catch (error) {
+                              setSaveError(error.message || 'Failed to delete signature.');
+                            }
+                          }}
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
-                  <p className="muted">Upload your first signature to reuse it anytime.</p>
+                  <p className="small muted">Saved signatures appear here so you can reuse them on any document.</p>
                 )}
               </div>
-            </div>
+            )}
+          </div>
+        </aside>
 
-            <div className="panel-section">
-              <h4>Layers on this page</h4>
-              <div className="layer-list">
-                {pageElements.length ? (
-                  [...pageElements].reverse().map((item) => (
-                    <button
+        <div className="editor-canvas" ref={shellRef} onPointerDown={() => setSelectedId(null)}>
+          <div className="editor-canvas-inner">
+            <div className="pdf-stage" ref={canvasRef} style={{ width: renderSize.width, height: renderSize.height }}>
+              <Page
+                pageNumber={currentPage}
+                width={targetWidth}
+                renderTextLayer={false}
+                renderAnnotationLayer={false}
+                onRenderSuccess={(page) => {
+                  setRenderSize({ width: page.width, height: page.height });
+                }}
+              />
+
+              <div className="overlay">
+                {pageElements.map((item) => {
+                  const isSelected = selectedId === item.id;
+                  return (
+                    <div
                       key={item.id}
-                      className={`layer-row ${item.id === selectedId ? 'active' : ''}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedId(item.id);
+                      className={`item ${isSelected ? 'selected' : ''} ${item.type === 'text' ? 'text-item' : 'image-item'}`}
+                      style={{
+                        left: `${item.x * 100}%`,
+                        top: `${item.y * 100}%`,
+                        width: `${item.width * 100}%`,
+                        height: `${item.height * 100}%`,
+                      }}
+                      onMouseEnter={() => setHoverId(item.id)}
+                      onMouseLeave={() => setHoverId((prev) => (prev === item.id ? null : prev))}
+                      onPointerDown={(event) => startInteraction(event, item.id, 'drag')}
+                      onDoubleClick={() => {
+                        if (item.type === 'text') {
+                          setSelectedId(item.id);
+                          setEditingId(item.id);
+                        }
                       }}
                     >
-                      <span>{item.type === 'text' ? 'Text' : item.isSignature ? 'Signature' : 'Image'}</span>
-                      <small>
-                        {Math.round(item.x * 100)}%, {Math.round(item.y * 100)}%
-                      </small>
-                    </button>
-                  ))
-                ) : (
-                  <p className="muted">No elements on this page yet.</p>
-                )}
-              </div>
-            </div>
-          </aside>
-
-          <div className="canvas-shell" ref={shellRef}>
-            <div className="canvas-scroll">
-              <div className="pdf-stage" ref={canvasRef} style={{ width: renderSize.width, height: renderSize.height }}>
-                <Document
-                  file={pdfFile}
-                  onLoadSuccess={({ numPages: loaded }) => {
-                    setNumPages(loaded);
-                    setCurrentPage((prev) => clamp(prev, 1, loaded));
-                  }}
-                  loading={<div className="loading">Loading PDF...</div>}
-                >
-                  <Page
-                    pageNumber={currentPage}
-                    width={targetWidth}
-                    renderTextLayer={false}
-                    renderAnnotationLayer={false}
-                    onRenderSuccess={(page) => {
-                      setRenderSize({ width: page.width, height: page.height });
-                    }}
-                  />
-                </Document>
-
-                <div className="overlay" style={{ width: renderSize.width, height: renderSize.height }}>
-                  {pageElements.map((item) => {
-                    const style = {
-                      left: `${item.x * 100}%`,
-                      top: `${item.y * 100}%`,
-                      width: `${item.width * 100}%`,
-                      height: `${item.height * 100}%`,
-                    };
-
-                    return (
-                      <div
-                        key={item.id}
-                        className={`item ${selectedId === item.id ? 'selected' : ''} ${item.type === 'text' ? 'text-item' : 'image-item'}`}
-                        style={style}
-                        onMouseEnter={() => setHoverId(item.id)}
-                        onMouseLeave={() => setHoverId((prev) => (prev === item.id ? null : prev))}
-                        onPointerDown={(event) => startInteraction(event, item.id, 'drag')}
-                        onDoubleClick={() => {
-                          if (item.type === 'text') {
-                            setSelectedId(item.id);
-                            setEditingId(item.id);
-                          }
-                        }}
-                      >
-                        {item.type === 'text' ? (
-                          editingId === item.id ? (
-                            <textarea
-                              autoFocus
-                              value={item.text}
-                              onChange={(event) => updateSelected({ text: event.target.value })}
-                              onBlur={() => setEditingId(null)}
-                              className="inline-editor"
-                            />
-                          ) : (
-                            <div
-                              className="text-content"
-                              style={{
-                                color: item.color,
-                                fontWeight: item.bold ? 700 : 500,
-                                fontSize: `${Math.max(item.fontSize * renderSize.width, 8)}px`,
-                              }}
-                            >
-                              {item.text}
-                            </div>
-                          )
+                      {item.type === 'text' ? (
+                        editingId === item.id ? (
+                          <textarea
+                            autoFocus
+                            value={item.text}
+                            onChange={(event) => updateSelected({ text: event.target.value })}
+                            onBlur={() => setEditingId(null)}
+                            className="inline-editor"
+                            style={{
+                              color: item.color,
+                              fontWeight: item.bold ? 700 : 400,
+                              fontSize: `${Math.max(item.fontSize * renderSize.width, 8)}px`,
+                            }}
+                          />
                         ) : (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={item.url} alt={item.isSignature ? 'Signature' : 'Overlay'} draggable={false} />
-                        )}
+                          <div
+                            className="text-content"
+                            style={{
+                              color: item.color,
+                              fontWeight: item.bold ? 700 : 400,
+                              fontSize: `${Math.max(item.fontSize * renderSize.width, 8)}px`,
+                            }}
+                          >
+                            {item.text}
+                          </div>
+                        )
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={item.url} alt={item.isSignature ? 'Signature' : 'Overlay'} draggable={false} />
+                      )}
 
-                        {selectedId === item.id || (item.type === 'image' && hoverId === item.id) ? (
-                          <>
-                            <button className="resize-handle nw" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'nw')} aria-label="Resize" />
-                            <button className="resize-handle ne" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'ne')} aria-label="Resize" />
-                            <button className="resize-handle sw" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'sw')} aria-label="Resize" />
-                            <button className="resize-handle se" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'se')} aria-label="Resize" />
-                          </>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
+                      {isSelected && editingId !== item.id ? (
+                        <div className="item-toolbar" onPointerDown={(event) => event.stopPropagation()}>
+                          {item.type === 'text' ? (
+                            <button type="button" onClick={() => setEditingId(item.id)} aria-label="Edit text" title="Edit text">
+                              <Type size={14} />
+                            </button>
+                          ) : null}
+                          <button type="button" onClick={duplicateSelected} aria-label="Duplicate" title="Duplicate">
+                            <Copy size={14} />
+                          </button>
+                          <button type="button" onClick={removeSelected} aria-label="Delete" title="Delete">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ) : null}
+
+                      {isSelected || (item.type === 'image' && hoverId === item.id) ? (
+                        <>
+                          <button type="button" className="resize-handle nw" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'nw')} aria-label="Resize" />
+                          <button type="button" className="resize-handle ne" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'ne')} aria-label="Resize" />
+                          <button type="button" className="resize-handle sw" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'sw')} aria-label="Resize" />
+                          <button type="button" className="resize-handle se" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'se')} aria-label="Resize" />
+                        </>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
 
-          <aside className="right-panel" onPointerDown={(event) => event.stopPropagation()}>
-            <div className="panel-section">
-              <h4>Selection</h4>
-              {!selectedElement ? (
-                <p className="muted">Pick an element to edit its properties.</p>
-              ) : (
-                <>
-                  <p className="muted">
-                    {selectedElement.type === 'text'
-                      ? 'Text block'
-                      : selectedElement.isSignature
-                        ? 'Signature image'
-                        : 'Image overlay'}
-                  </p>
+          {numPages > 1 ? (
+            <div className="page-pager" onPointerDown={(event) => event.stopPropagation()}>
+              <button type="button" className="btn btn-ghost btn-icon" onClick={() => goToPage(currentPage - 1)} disabled={currentPage <= 1} aria-label="Previous page">
+                <ChevronLeft size={16} />
+              </button>
+              <span>{currentPage} / {numPages}</span>
+              <button type="button" className="btn btn-ghost btn-icon" onClick={() => goToPage(currentPage + 1)} disabled={currentPage >= numPages} aria-label="Next page">
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          ) : null}
+        </div>
 
+        <aside className={`editor-inspector ${rightOpen ? 'is-open' : ''}`} aria-label="Properties" onPointerDown={(event) => event.stopPropagation()}>
+          <div className="panel-scroll">
+            {saveError ? (
+              <div className="panel-section">
+                <div className="alert alert-error" role="alert">{saveError}</div>
+              </div>
+            ) : null}
+
+            <section className="panel-section">
+              <h3>{selectedElement ? (selectedElement.type === 'text' ? 'Text' : selectedElement.isSignature ? 'Signature' : 'Image') : 'Properties'}</h3>
+              {!selectedElement ? (
+                <div className="panel-stack">
+                  <p className="small muted">Select an item on the page to edit it, or add something new.</p>
+                  <div className="panel-row">
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={addText}><Plus size={14} /> Text</button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => imageInputRef.current?.click()} disabled={busy}><Plus size={14} /> Image</button>
+                  </div>
+                  <p className="small muted">
+                    Tip: <span className="kbd">⌘Z</span> undo · <span className="kbd">Del</span> remove · arrows nudge
+                  </p>
+                </div>
+              ) : (
+                <div className="panel-stack">
                   {selectedElement.type === 'text' ? (
                     <>
-                      <label className="field-label" htmlFor="text-content-field">Text</label>
-                      <textarea
-                        id="text-content-field"
-                        value={selectedElement.text}
-                        onChange={(event) => updateSelected({ text: event.target.value })}
-                        rows={4}
-                        className="field"
-                      />
-
-                      <label className="field-label" htmlFor="font-size-field">
-                        Font Size ({Math.round(selectedElement.fontSize * 1000) / 10}%)
-                      </label>
-                      <input
-                        id="font-size-field"
-                        type="range"
-                        min={0.012}
-                        max={0.09}
-                        step={0.002}
-                        value={selectedElement.fontSize}
-                        onChange={(event) => updateSelected({ fontSize: Number(event.target.value) })}
-                      />
-
-                      <label className="field-label" htmlFor="text-color-field">Color</label>
-                      <input
-                        id="text-color-field"
-                        type="color"
-                        value={selectedElement.color}
-                        onChange={(event) => updateSelected({ color: event.target.value })}
-                        className="color-input"
-                      />
-
-                      <button className="ghost-btn" onClick={() => updateSelected({ bold: !selectedElement.bold })}>
-                        <Move size={16} /> {selectedElement.bold ? 'Bold On' : 'Bold Off'}
-                      </button>
+                      <div className="field">
+                        <label className="field-label" htmlFor="text-content-field">Content</label>
+                        <textarea
+                          id="text-content-field"
+                          value={selectedElement.text}
+                          onChange={(event) => updateSelected({ text: event.target.value })}
+                          rows={3}
+                          className="textarea"
+                        />
+                      </div>
+                      <div className="field">
+                        <label className="field-label" htmlFor="font-size-field">
+                          Size · {Math.round(selectedElement.fontSize * 612)} pt
+                        </label>
+                        <input
+                          id="font-size-field"
+                          type="range"
+                          min={0.012}
+                          max={0.09}
+                          step={0.002}
+                          value={selectedElement.fontSize}
+                          onChange={(event) => updateSelected({ fontSize: Number(event.target.value) })}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="field-label">Style</span>
+                        <div className="panel-row" style={{ justifyContent: 'space-between' }}>
+                          <div className="color-swatches">
+                            {TEXT_COLORS.map((hex) => (
+                              <button
+                                key={hex}
+                                type="button"
+                                className="swatch"
+                                style={{ background: hex }}
+                                aria-label={`Color ${hex}`}
+                                aria-pressed={selectedElement.color === hex}
+                                onClick={() => updateSelected({ color: hex })}
+                              />
+                            ))}
+                            <input
+                              type="color"
+                              value={selectedElement.color}
+                              onChange={(event) => updateSelected({ color: event.target.value })}
+                              className="color-input"
+                              aria-label="Custom color"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            className={`btn btn-secondary btn-icon btn-sm ${selectedElement.bold ? 'is-active' : ''}`}
+                            onClick={() => updateSelected({ bold: !selectedElement.bold })}
+                            aria-pressed={selectedElement.bold}
+                            aria-label="Bold"
+                            style={{ flex: '0 0 auto' }}
+                          >
+                            <Bold size={15} />
+                          </button>
+                        </div>
+                      </div>
                     </>
                   ) : (
-                    <p className="muted">Drag or use the corner handles to resize image overlays.</p>
+                    <p className="small muted">Drag to move. Use the corner handles to resize.</p>
                   )}
-
-                  <div className="stack">
-                    <button className="ghost-btn" onClick={duplicateSelected}>Duplicate</button>
-                    <button className="danger-btn" onClick={removeSelected}>Delete</button>
+                  <div className="panel-row">
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={duplicateSelected}><Copy size={14} /> Duplicate</button>
+                    <button type="button" className="btn btn-danger-ghost btn-sm" onClick={removeSelected}><Trash2 size={14} /> Delete</button>
                   </div>
-                </>
+                </div>
               )}
-            </div>
+            </section>
 
-            <div className="panel-section">
-              <h4>Fill &amp; Sign Fields</h4>
+            <section className="panel-section">
+              <h3>Fill &amp; sign</h3>
               {formLoading ? (
-                <p className="muted">Detecting fillable fields...</p>
+                <div className="skeleton" style={{ height: 80 }} />
               ) : formFields.length ? (
-                <div className="form-field-list">
+                <div className="panel-stack">
                   {formFields.map((field) => {
                     const value = formValues[field.name];
                     const controlId = `form-field-${field.name.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
                     if (field.type === 'checkbox') {
                       return (
-                        <label key={field.name} className="form-field-row checkbox-row" htmlFor={controlId}>
+                        <label key={field.name} className="check-row" htmlFor={controlId}>
                           <input
                             id={controlId}
                             type="checkbox"
@@ -1199,15 +1346,15 @@ export default function ForgeEditor({
 
                     if (field.type === 'radio' || field.type === 'dropdown' || field.type === 'list') {
                       return (
-                        <div key={field.name} className="form-field-row">
+                        <div key={field.name} className="field">
                           <label className="field-label" htmlFor={controlId}>{field.label}</label>
                           <select
                             id={controlId}
-                            className="field"
+                            className="select"
                             value={value ?? ''}
                             onChange={(event) => updateFormValue(field.name, event.target.value)}
                           >
-                            <option value="">Select...</option>
+                            <option value="">Select…</option>
                             {(field.options || []).map((option) => (
                               <option key={`${field.name}-${option}`} value={option}>{option}</option>
                             ))}
@@ -1217,160 +1364,102 @@ export default function ForgeEditor({
                     }
 
                     return (
-                      <div key={field.name} className="form-field-row">
+                      <div key={field.name} className="field">
                         <label className="field-label" htmlFor={controlId}>{field.label}</label>
-                        <input
-                          id={controlId}
-                          type="text"
-                          className="field"
-                          value={value ?? ''}
-                          onChange={(event) => updateFormValue(field.name, event.target.value)}
-                        />
-                        <div className="stack">
-                          <button
-                            type="button"
-                            className="ghost-btn"
-                            onClick={() => applyQuickFormValue(field.name, 'date')}
+                        <div className="input-group">
+                          <input
+                            id={controlId}
+                            type="text"
+                            className="input"
+                            value={value ?? ''}
+                            onChange={(event) => updateFormValue(field.name, event.target.value)}
+                          />
+                          <Menu
+                            trigger={({ toggle, ...aria }) => (
+                              <button type="button" className="btn btn-secondary btn-icon" onClick={toggle} aria-label={`Quick fill ${field.label}`} {...aria}>
+                                <ChevronDown size={15} />
+                              </button>
+                            )}
                           >
-                            Insert Date
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost-btn"
-                            onClick={() => applyQuickFormValue(field.name, 'initials')}
-                            disabled={!initialsValue}
-                          >
-                            Insert Initials
-                          </button>
+                            <button type="button" role="menuitem" className="menu-item" onClick={() => applyQuickFormValue(field.name, 'date')}>Today&apos;s date</button>
+                            <button type="button" role="menuitem" className="menu-item" onClick={() => applyQuickFormValue(field.name, 'initials')} disabled={!initialsValue}>
+                              My initials <small>{initialsValue}</small>
+                            </button>
+                          </Menu>
                         </div>
                       </div>
                     );
                   })}
                 </div>
               ) : (
-                <div className="quick-fill-panel">
-                  <p className="muted">
-                    No interactive form fields were detected. Use Quick Fill to insert text on this page.
-                  </p>
-                  <label className="field-label" htmlFor="quick-fill-name">Name</label>
-                  <div className="quick-fill-row">
-                    <input
-                      id="quick-fill-name"
-                      className="field"
-                      value={quickFill.name}
-                      onChange={(event) => setQuickFill((prev) => ({ ...prev, name: event.target.value }))}
-                    />
-                    <button
-                      type="button"
-                      className="ghost-btn"
-                      onClick={() => insertQuickFillText(quickFill.name, { key: 'quickfill-name' })}
-                    >
-                      Insert
+                <div className="panel-stack">
+                  <p className="small muted">No form fields found. Insert your details as text on page {currentPage}:</p>
+                  {[
+                    ['name', 'Name', 'quickfill-name', undefined],
+                    ['email', 'Email', 'quickfill-email', 0.44],
+                    ['address', 'Address', 'quickfill-address', 0.48],
+                    ['mobile', 'Phone', 'quickfill-mobile', undefined],
+                  ].map(([key, label, fillKey, width]) => (
+                    <div key={key} className="field">
+                      <label className="field-label" htmlFor={`quick-fill-${key}`}>{label}</label>
+                      <div className="input-group">
+                        <input
+                          id={`quick-fill-${key}`}
+                          className="input"
+                          value={quickFill[key]}
+                          onChange={(event) => setQuickFill((prev) => ({ ...prev, [key]: event.target.value }))}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-icon"
+                          onClick={() => insertQuickFillText(quickFill[key], { key: fillKey, width })}
+                          disabled={!String(quickFill[key] || '').trim()}
+                          aria-label={`Insert ${label}`}
+                          title={`Insert ${label}`}
+                        >
+                          <Plus size={15} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="panel-row">
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => insertQuickFillText(new Date().toLocaleDateString(), { key: 'quickfill-date' })}>
+                      Date
                     </button>
-                  </div>
-
-                  <label className="field-label" htmlFor="quick-fill-address">Address</label>
-                  <div className="quick-fill-row">
-                    <input
-                      id="quick-fill-address"
-                      className="field"
-                      value={quickFill.address}
-                      onChange={(event) => setQuickFill((prev) => ({ ...prev, address: event.target.value }))}
-                    />
-                    <button
-                      type="button"
-                      className="ghost-btn"
-                      onClick={() =>
-                        insertQuickFillText(quickFill.address, { key: 'quickfill-address', width: 0.48 })
-                      }
-                    >
-                      Insert
-                    </button>
-                  </div>
-
-                  <label className="field-label" htmlFor="quick-fill-email">Email</label>
-                  <div className="quick-fill-row">
-                    <input
-                      id="quick-fill-email"
-                      className="field"
-                      value={quickFill.email}
-                      onChange={(event) => setQuickFill((prev) => ({ ...prev, email: event.target.value }))}
-                    />
-                    <button
-                      type="button"
-                      className="ghost-btn"
-                      onClick={() =>
-                        insertQuickFillText(quickFill.email, { key: 'quickfill-email', width: 0.44 })
-                      }
-                    >
-                      Insert
-                    </button>
-                  </div>
-
-                  <label className="field-label" htmlFor="quick-fill-mobile">Mobile</label>
-                  <div className="quick-fill-row">
-                    <input
-                      id="quick-fill-mobile"
-                      className="field"
-                      value={quickFill.mobile}
-                      onChange={(event) => setQuickFill((prev) => ({ ...prev, mobile: event.target.value }))}
-                    />
-                    <button
-                      type="button"
-                      className="ghost-btn"
-                      onClick={() => insertQuickFillText(quickFill.mobile, { key: 'quickfill-mobile' })}
-                    >
-                      Insert
-                    </button>
-                  </div>
-
-                  <div className="stack">
-                    <button
-                      type="button"
-                      className="ghost-btn"
-                      onClick={() =>
-                        insertQuickFillText(new Date().toLocaleDateString(), { key: 'quickfill-date' })
-                      }
-                    >
-                      Insert Date
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost-btn"
-                      onClick={() => insertQuickFillText(initialsValue, { key: 'quickfill-initials' })}
-                      disabled={!initialsValue}
-                    >
-                      Insert Initials
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => insertQuickFillText(initialsValue, { key: 'quickfill-initials' })} disabled={!initialsValue}>
+                      Initials
                     </button>
                   </div>
                 </div>
               )}
-            </div>
+            </section>
 
-            <div className="panel-section">
-              <h4>Export</h4>
-              <div className="stack">
-                <button className="primary-btn" onClick={exportPdf} disabled={busy}>
-                  <Download size={16} /> Download PDF
-                </button>
-                <button className="ghost-btn" onClick={() => exportImage('png')} disabled={busy}>
-                  <FileImage size={16} /> Export PNG (Current Page)
-                </button>
-                <button className="ghost-btn" onClick={() => exportImage('jpeg')} disabled={busy}>
-                  <FileImage size={16} /> Export JPG (Current Page)
-                </button>
-              </div>
-            </div>
-
-            <div className="panel-section user-block">
-              <h4>
-                <User size={16} /> Account
-              </h4>
-              <p className="muted small">{userEmail}</p>
-            </div>
-          </aside>
-        </div>
-      </section>
-    </main>
+            <section className="panel-section">
+              <h3>
+                <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Layers size={13} /> Page {currentPage} layers</span>
+                <span className="badge">{pageElements.length}</span>
+              </h3>
+              {pageElements.length ? (
+                <div className="layer-list">
+                  {[...pageElements].reverse().map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`layer-row ${item.id === selectedId ? 'active' : ''}`}
+                      onClick={() => setSelectedId(item.id)}
+                    >
+                      {item.type === 'text' ? <Type size={14} /> : item.isSignature ? <Signature size={14} /> : <ImagePlus size={14} />}
+                      <span>{item.type === 'text' ? item.text || 'Empty text' : item.isSignature ? 'Signature' : 'Image'}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="small muted">Nothing added to this page yet.</p>
+              )}
+            </section>
+          </div>
+        </aside>
+      </Document>
+    </div>
   );
 }

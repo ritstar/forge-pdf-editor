@@ -1,20 +1,36 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PDFDocument } from 'pdf-lib';
+import { ArrowLeft, ArrowRight, FileImage, ImagePlus, X } from 'lucide-react';
+import ToolShell from '@/app/components/ToolShell';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
 import { downloadPdfBytes, formatFileSize } from '@/app/utils/files';
 import { toEmbeddableImage } from '@/app/utils/imageNormalize';
-import { Plus, Trash2, FileImage, Image as ImageIcon, GripVertical } from 'lucide-react';
+import { moveItem, useReorder } from '@/app/utils/useReorder';
+
+const IMAGE_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,image/bmp';
+
+const PAGE_SIZES = {
+    fit: null,
+    a4: [595.28, 841.89],
+    letter: [612, 792],
+};
+
+const MARGINS = { none: 0, small: 20, large: 48 };
 
 export default function JpgToPdfPage() {
     const [images, setImages] = useState([]);
+    const [pageSize, setPageSize] = useState('a4');
+    const [orientation, setOrientation] = useState('auto');
+    const [margin, setMargin] = useState('small');
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState('');
-    const [dragActive, setDragActive] = useState(false);
-    const fileInputRef = useRef(null);
+    const [result, setResult] = useState('');
+    const addInputRef = useRef(null);
     const imagesRef = useRef(images);
+    const { itemProps, stateClass } = useReorder((from, to) => setImages((prev) => moveItem(prev, from, to)));
 
     useEffect(() => {
         imagesRef.current = images;
@@ -25,57 +41,30 @@ export default function JpgToPdfPage() {
 
     const handleFiles = (newFiles) => {
         setError('');
-        const validFiles = Array.from(newFiles).filter(file => file.type.startsWith('image/'));
-
+        setResult('');
+        const validFiles = newFiles.filter((file) => file.type.startsWith('image/'));
         if (validFiles.length !== newFiles.length) {
-            setError('Some files were ignored because they are not valid images.');
+            setError('Some files were skipped because they are not images.');
         }
-
-        const newImagesWithId = validFiles.map(file => ({
-            id: crypto.randomUUID(),
-            file,
-            name: file.name,
-            url: URL.createObjectURL(file),
-            size: formatFileSize(file.size)
-        }));
-
-        setImages(prev => [...prev, ...newImagesWithId]);
-    };
-
-    const handleDrag = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.type === 'dragenter' || e.type === 'dragover') {
-            setDragActive(true);
-        } else if (e.type === 'dragleave') {
-            setDragActive(false);
-        }
-    };
-
-    const handleDrop = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setDragActive(false);
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            handleFiles(e.dataTransfer.files);
-        }
+        setImages((prev) => [
+            ...prev,
+            ...validFiles.map((file) => ({ id: crypto.randomUUID(), file, name: file.name, url: URL.createObjectURL(file) })),
+        ]);
     };
 
     const removeImage = (id) => {
-        setImages(prev => {
-            const removed = prev.find(img => img.id === id);
+        setImages((prev) => {
+            const removed = prev.find((img) => img.id === id);
             if (removed) URL.revokeObjectURL(removed.url);
-            return prev.filter(img => img.id !== id);
+            return prev.filter((img) => img.id !== id);
         });
     };
 
-    const moveImage = (index, direction) => {
-        if ((direction === -1 && index === 0) || (direction === 1 && index === images.length - 1)) return;
-        const newImages = [...images];
-        const temp = newImages[index];
-        newImages[index] = newImages[index + direction];
-        newImages[index + direction] = temp;
-        setImages(newImages);
+    const reset = () => {
+        images.forEach((img) => URL.revokeObjectURL(img.url));
+        setImages([]);
+        setError('');
+        setResult('');
     };
 
     const convertToPDF = async () => {
@@ -84,6 +73,7 @@ export default function JpgToPdfPage() {
         try {
             setIsProcessing(true);
             setError('');
+            setResult('');
 
             const pdfDoc = await PDFDocument.create();
 
@@ -94,27 +84,32 @@ export default function JpgToPdfPage() {
                 } catch {
                     throw new Error(`"${imgObj.name}" could not be read as an image.`);
                 }
-                const embeddedImage = image.kind === 'png'
-                    ? await pdfDoc.embedPng(image.bytes)
-                    : await pdfDoc.embedJpg(image.bytes);
+                const embedded = image.kind === 'png' ? await pdfDoc.embedPng(image.bytes) : await pdfDoc.embedJpg(image.bytes);
+                const { width: imgW, height: imgH } = embedded.scale(1);
 
-                const { width, height } = embeddedImage.scale(1);
-                const page = pdfDoc.addPage([width, height]);
+                const preset = PAGE_SIZES[pageSize];
+                if (!preset) {
+                    const page = pdfDoc.addPage([imgW, imgH]);
+                    page.drawImage(embedded, { x: 0, y: 0, width: imgW, height: imgH });
+                    continue;
+                }
 
-                page.drawImage(embeddedImage, {
-                    x: 0,
-                    y: 0,
-                    width,
-                    height,
-                });
+                const landscape = orientation === 'landscape' || (orientation === 'auto' && imgW > imgH);
+                const [pw, ph] = landscape ? [preset[1], preset[0]] : preset;
+                const m = MARGINS[margin];
+                const scale = Math.min((pw - m * 2) / imgW, (ph - m * 2) / imgH);
+                const w = imgW * scale;
+                const h = imgH * scale;
+                const page = pdfDoc.addPage([pw, ph]);
+                page.drawImage(embedded, { x: (pw - w) / 2, y: (ph - h) / 2, width: w, height: h });
             }
 
-            const pdfBytes = await pdfDoc.save();
-            downloadPdfBytes(pdfBytes, `images_converted_${Date.now()}.pdf`);
+            downloadPdfBytes(await pdfDoc.save(), `images_${images.length}.pdf`);
+            setResult(`Created a ${images.length}-page PDF — downloaded.`);
 
             const user = auth.currentUser;
             if (user) {
-                logToolAction(user.uid, 'jpg-to-pdf', 'JPG to PDF', `converted_${images.length}_images.pdf`);
+                logToolAction(user.uid, 'jpg-to-pdf', 'Image to PDF', `converted_${images.length}_images.pdf`);
             }
         } catch (err) {
             console.error(err);
@@ -124,152 +119,100 @@ export default function JpgToPdfPage() {
         }
     };
 
-    return (
-        <div style={{ maxWidth: '900px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <div style={{ textAlign: 'center', marginBottom: '10px' }}>
-                <h1 style={{ fontSize: '2.5rem', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-                    <div style={{ color: '#D69E2E', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#D69E2E15', padding: '12px', borderRadius: '12px' }}>
-                        <FileImage size={32} />
-                    </div>
-                    JPG to PDF
-                </h1>
-                <p className="muted" style={{ fontSize: '1.1rem' }}>Convert JPG, PNG images to PDF in seconds. Easily adjust orientation and margins.</p>
-            </div>
+    const totalSize = images.reduce((sum, img) => sum + img.file.size, 0);
 
-            {!images.length ? (
-                <div
-                    onDragEnter={handleDrag}
-                    onDragLeave={handleDrag}
-                    onDragOver={handleDrag}
-                    onDrop={handleDrop}
-                    style={{
-                        border: `2px dashed ${dragActive ? 'var(--accent)' : 'var(--line)'}`,
-                        borderRadius: '16px',
-                        padding: '60px 20px',
-                        textAlign: 'center',
-                        background: dragActive ? 'var(--surface)' : 'var(--bg-soft)',
-                        transition: 'all 0.2s ease',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: '16px',
-                        maxWidth: '600px',
-                        margin: '0 auto',
-                        width: '100%'
-                    }}
-                    onClick={() => fileInputRef.current?.click()}
-                >
-                    <div style={{ background: 'var(--surface)', padding: '20px', borderRadius: '50%', boxShadow: 'var(--shadow)' }}>
-                        <ImageIcon size={40} color="var(--accent)" />
-                    </div>
-                    <div>
-                        <h3 style={{ margin: '0 0 8px', fontSize: '1.4rem' }}>Select JPG images</h3>
-                        <p className="muted" style={{ margin: 0 }}>or drop images here</p>
-                    </div>
+    return (
+        <ToolShell
+            toolId="jpg-to-pdf"
+            stage={images.length ? 'work' : 'select'}
+            error={error}
+            onReset={reset}
+            dropzone={{
+                accept: IMAGE_ACCEPT,
+                multiple: true,
+                onFiles: handleFiles,
+                title: 'Select images',
+                hint: 'JPG, PNG, WebP, GIF or BMP — drop as many as you like',
+                icon: ImagePlus,
+            }}
+            workspaceTitle={`${images.length} ${images.length === 1 ? 'image' : 'images'}`}
+            workspaceSubtitle={`${formatFileSize(totalSize)} · drag to reorder pages`}
+            workspaceActions={
+                <>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => addInputRef.current?.click()}>
+                        <ImagePlus size={15} /> Add images
+                    </button>
                     <input
-                        ref={fileInputRef}
+                        ref={addInputRef}
                         type="file"
+                        accept={IMAGE_ACCEPT}
                         multiple
-                        accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
-                        style={{ display: 'none' }}
+                        hidden
                         onChange={(e) => {
-                            if (e.target.files) handleFiles(e.target.files);
+                            handleFiles(Array.from(e.target.files || []));
                             e.target.value = '';
                         }}
                     />
-                </div>
-            ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                        <h3 style={{ margin: 0 }}>{images.length} {images.length === 1 ? 'image' : 'images'} selected</h3>
-                        <div style={{ display: 'flex', gap: '10px' }}>
-                            <button className="ghost-btn" onClick={() => fileInputRef.current?.click()}>
-                                <Plus size={16} /> Add more images
+                </>
+            }
+            panel={{
+                subtitle: 'Page layout',
+                body: (
+                    <>
+                        <div className="field">
+                            <span className="field-label">Page size</span>
+                            <div className="segmented" role="group" aria-label="Page size">
+                                <button type="button" aria-pressed={pageSize === 'a4'} onClick={() => setPageSize('a4')}>A4</button>
+                                <button type="button" aria-pressed={pageSize === 'letter'} onClick={() => setPageSize('letter')}>Letter</button>
+                                <button type="button" aria-pressed={pageSize === 'fit'} onClick={() => setPageSize('fit')}>Fit image</button>
+                            </div>
+                        </div>
+                        {pageSize !== 'fit' ? (
+                            <>
+                                <div className="field">
+                                    <span className="field-label">Orientation</span>
+                                    <div className="segmented" role="group" aria-label="Orientation">
+                                        <button type="button" aria-pressed={orientation === 'auto'} onClick={() => setOrientation('auto')}>Auto</button>
+                                        <button type="button" aria-pressed={orientation === 'portrait'} onClick={() => setOrientation('portrait')}>Portrait</button>
+                                        <button type="button" aria-pressed={orientation === 'landscape'} onClick={() => setOrientation('landscape')}>Landscape</button>
+                                    </div>
+                                </div>
+                                <div className="field">
+                                    <span className="field-label">Margin</span>
+                                    <div className="segmented" role="group" aria-label="Margin">
+                                        <button type="button" aria-pressed={margin === 'none'} onClick={() => setMargin('none')}>None</button>
+                                        <button type="button" aria-pressed={margin === 'small'} onClick={() => setMargin('small')}>Small</button>
+                                        <button type="button" aria-pressed={margin === 'large'} onClick={() => setMargin('large')}>Large</button>
+                                    </div>
+                                </div>
+                            </>
+                        ) : null}
+                    </>
+                ),
+                result,
+                action: { label: 'Convert to PDF', icon: FileImage, busyLabel: 'Converting…', onClick: convertToPDF, busy: isProcessing },
+            }}
+        >
+            <div className="image-grid">
+                {images.map((img, index) => (
+                    <div key={img.id} className={`image-tile ${stateClass(index)}`} {...itemProps(index)}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={img.url} alt={img.name} draggable={false} />
+                        <span className="image-tile-name">{index + 1}. {img.name}</span>
+                        <div className="page-tile-tools">
+                            <button type="button" className="tile-btn" onClick={() => setImages((prev) => moveItem(prev, index, index - 1))} disabled={index === 0} aria-label="Move earlier">
+                                <ArrowLeft size={14} />
                             </button>
-                            <input
-                                ref={fileInputRef}
-                                type="file"
-                                multiple
-                                accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
-                                style={{ display: 'none' }}
-                                onChange={(e) => {
-                                    if (e.target.files) handleFiles(e.target.files);
-                                    e.target.value = '';
-                                }}
-                            />
+                            <button type="button" className="tile-btn" onClick={() => setImages((prev) => moveItem(prev, index, index + 1))} disabled={index === images.length - 1} aria-label="Move later">
+                                <ArrowRight size={14} />
+                            </button>
+                            <button type="button" className="tile-btn danger" onClick={() => removeImage(img.id)} aria-label={`Remove ${img.name}`}>
+                                <X size={14} />
+                            </button>
                         </div>
                     </div>
-
-                    <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-                        gap: '16px',
-                        background: 'var(--surface-2)',
-                        padding: '20px',
-                        borderRadius: '12px',
-                        border: '1px solid var(--line)'
-                    }}>
-                        {images.map((img, index) => (
-                            <div
-                                key={img.id}
-                                style={{
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    background: 'var(--surface)',
-                                    border: '1px solid var(--line)',
-                                    borderRadius: '12px',
-                                    padding: '12px',
-                                    boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
-                                    gap: '10px',
-                                    position: 'relative'
-                                }}
-                            >
-                                <div style={{ height: '140px', width: '100%', borderRadius: '8px', overflow: 'hidden', background: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={img.url} alt={img.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                                </div>
-
-                                <div style={{ flex: 1, minWidth: 0, textAlign: 'center' }}>
-                                    <p style={{ margin: '0 0 2px', fontWeight: 500, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {img.name}
-                                    </p>
-                                </div>
-
-                                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--line)', paddingTop: '8px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                                        <button onClick={() => moveImage(index, -1)} disabled={index === 0} className="ghost-btn" style={{ padding: '4px', minHeight: 'auto', border: 'none', opacity: index === 0 ? 0.3 : 1 }}><GripVertical size={14} /></button>
-                                        <button onClick={() => moveImage(index, 1)} disabled={index === images.length - 1} className="ghost-btn" style={{ padding: '4px', minHeight: 'auto', border: 'none', opacity: index === images.length - 1 ? 0.3 : 1 }}><GripVertical size={14} /></button>
-                                    </div>
-
-                                    <button
-                                        type="button"
-                                        onClick={() => removeImage(img.id)}
-                                        className="ghost-btn"
-                                        style={{ color: 'var(--danger)', padding: '4px', border: 'none' }}
-                                        aria-label="Remove image"
-                                    >
-                                        <Trash2 size={16} />
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-
-                    {error && <p className="error-text" style={{ textAlign: 'center', padding: '10px', background: 'var(--danger-bg)', borderRadius: '8px' }}>{error}</p>}
-
-                    <div style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
-                        <button
-                            onClick={convertToPDF}
-                            disabled={isProcessing || !images.length}
-                            className="primary-btn"
-                            style={{ padding: '16px 32px', fontSize: '1.1rem', background: '#D69E2E', color: '#fff', opacity: (isProcessing || !images.length) ? 0.6 : 1 }}
-                        >
-                            {isProcessing ? 'Converting to PDF...' : 'Convert to PDF'} <FileImage size={20} />
-                        </button>
-                    </div>
-                </div>
-            )}
-        </div>
+                ))}
+            </div>
+        </ToolShell>
     );
 }

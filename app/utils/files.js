@@ -11,7 +11,10 @@ export function stripExtension(name, fallback = 'document') {
 }
 
 export function formatFileSize(bytes) {
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  if (!Number.isFinite(bytes)) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
 // Revoking the object URL synchronously after click() cancels the download in some browsers

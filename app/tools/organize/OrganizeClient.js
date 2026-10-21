@@ -1,219 +1,87 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useState } from 'react';
 import { PDFDocument } from 'pdf-lib';
-import { Document, Page } from 'react-pdf';
+import { Document } from 'react-pdf';
+import { ArrowLeft, ArrowRight, LayoutGrid, RotateCcw, Trash2, Undo2 } from 'lucide-react';
 import '@/app/utils/pdfWorker';
+import ToolShell from '@/app/components/ToolShell';
+import LazyPage from '@/app/components/ui/LazyPage';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
 import { downloadPdfBytes, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
-import { FilePlus2, LayoutGrid, Trash2, X, RefreshCw, ChevronUp, ChevronDown, Undo2 } from 'lucide-react';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
+import { moveItem, useReorder } from '@/app/utils/useReorder';
 
-
-export default function OrganizePdfPage() {
+export default function OrganizeClient() {
     const [file, setFile] = useState(null);
     const [numPages, setNumPages] = useState(null);
-    const [pageOrder, setPageOrder] = useState([]);
-    const [deletedPages, setDeletedPages] = useState(new Set());
-    const [changeHistory, setChangeHistory] = useState([]);
+    // Each snapshot is { order: number[], removed: number[], note: string }.
+    const [state, setState] = useState({ order: [], removed: [] });
     const [undoStack, setUndoStack] = useState([]);
-    const [draggedIndex, setDraggedIndex] = useState(null);
+    const [log, setLog] = useState([]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState('');
-    const [dragActive, setDragActive] = useState(false);
-    const fileInputRef = useRef(null);
-    const pageOrderRef = useRef([]);
-    const deletedPagesRef = useRef(new Set());
-    const changeHistoryRef = useRef([]);
+    const [result, setResult] = useState('');
 
-    useEffect(() => {
-        pageOrderRef.current = pageOrder;
-    }, [pageOrder]);
+    const removed = new Set(state.removed);
 
-    useEffect(() => {
-        deletedPagesRef.current = deletedPages;
-    }, [deletedPages]);
+    const commit = (next, note) => {
+        setUndoStack((prev) => [...prev.slice(-99), state]);
+        setState(next);
+        setLog((prev) => [note, ...prev].slice(0, 50));
+        setResult('');
+    };
 
-    useEffect(() => {
-        changeHistoryRef.current = changeHistory;
-    }, [changeHistory]);
+    const movePage = (from, to) => {
+        if (to < 0 || to >= state.order.length || from === to) return;
+        const page = state.order[from];
+        commit({ ...state, order: moveItem(state.order, from, to) }, `Moved page ${page + 1} to position ${to + 1}`);
+    };
 
-    const handleFile = (selectedFile) => {
+    const toggleRemove = (pageIndex) => {
+        const isRemoved = removed.has(pageIndex);
+        commit(
+            { ...state, removed: isRemoved ? state.removed.filter((p) => p !== pageIndex) : [...state.removed, pageIndex] },
+            isRemoved ? `Restored page ${pageIndex + 1}` : `Removed page ${pageIndex + 1}`,
+        );
+    };
+
+    const undo = () => {
+        if (!undoStack.length) return;
+        setState(undoStack[undoStack.length - 1]);
+        setUndoStack((prev) => prev.slice(0, -1));
+        setLog((prev) => prev.slice(1));
+        setResult('');
+    };
+
+    const resetOrder = () => {
+        commit({ order: Array.from({ length: numPages }, (_, i) => i), removed: [] }, 'Reset to original order');
+    };
+
+    const { itemProps, stateClass } = useReorder(movePage);
+
+    const handleFiles = ([selectedFile]) => {
         setError('');
+        setResult('');
         if (!isPdfFile(selectedFile)) {
             setError('Please select a valid PDF file.');
             return;
         }
-
         setFile(selectedFile);
         setNumPages(null);
-        setPageOrder([]);
-        setDeletedPages(new Set());
-        setChangeHistory([]);
+        setState({ order: [], removed: [] });
         setUndoStack([]);
-        pageOrderRef.current = [];
-        deletedPagesRef.current = new Set();
-        changeHistoryRef.current = [];
+        setLog([]);
     };
 
-    const handleDrag = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.type === 'dragenter' || e.type === 'dragover') {
-            setDragActive(true);
-        } else if (e.type === 'dragleave') {
-            setDragActive(false);
-        }
-    };
-
-    const handleDrop = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setDragActive(false);
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            handleFile(e.dataTransfer.files[0]);
-        }
-    };
-
-    const createHistoryEntry = (message, meta = {}) => ({
-        id: crypto.randomUUID(),
-        text: `${new Date().toLocaleTimeString()} - ${message}`,
-        ...meta,
-    });
-
-    const prependHistoryEntry = (entry) => {
-        setChangeHistory((prev) => [entry, ...prev].slice(0, 120));
-    };
-
-    const removeHistoryById = (entryId) => {
-        setChangeHistory((prev) => prev.filter((item) => item.id !== entryId));
-    };
-
-    const pushActionSnapshot = (orderSnapshot, deletedSnapshot, historyDelta = null) => {
-        setUndoStack((prev) => [
-            ...prev,
-            {
-                pageOrder: [...orderSnapshot],
-                deletedPages: [...deletedSnapshot],
-                historyDelta,
-            },
-        ].slice(-120));
-    };
-
-    const handleMoveUp = (displayIndex) => {
-        movePage(displayIndex, displayIndex - 1);
-    };
-
-    const handleMoveDown = (displayIndex) => {
-        movePage(displayIndex, displayIndex + 1);
-    };
-
-    const handleToggleDelete = (pageIndex) => {
-        togglePageDeletion(pageIndex);
-    };
-
-    const addMoveHistory = (pageIndex, fromPos, toPos) => {
-        const latest = changeHistoryRef.current[0];
-        const isInverseOfLatest =
-            latest?.kind === 'move' &&
-            latest.pageIndex === pageIndex &&
-            latest.fromPos === toPos &&
-            latest.toPos === fromPos;
-
-        if (isInverseOfLatest) {
-            removeHistoryById(latest.id);
-            return { type: 'removed', entry: latest };
-        }
-
-        const entry = createHistoryEntry(
-            `Moved page ${pageIndex + 1} from position ${fromPos} to ${toPos}`,
-            { kind: 'move', pageIndex, fromPos, toPos }
-        );
-        prependHistoryEntry(entry);
-        return { type: 'added', entry };
-    };
-
-    const togglePageDeletion = (pageIndex) => {
-        const currentDeleted = new Set(deletedPagesRef.current);
-        const wasDeleted = currentDeleted.has(pageIndex);
-        const priorToggle = changeHistoryRef.current.find(
-            (item) => item.kind === 'toggle-delete' && item.pageIndex === pageIndex
-        );
-        let historyDelta;
-        if (priorToggle) {
-            removeHistoryById(priorToggle.id);
-            historyDelta = { type: 'removed', entry: priorToggle };
-        } else {
-            const entry = createHistoryEntry(
-                wasDeleted ? `Restored page ${pageIndex + 1}` : `Marked page ${pageIndex + 1} for deletion`,
-                { kind: 'toggle-delete', pageIndex }
-            );
-            prependHistoryEntry(entry);
-            historyDelta = { type: 'added', entry };
-        }
-        pushActionSnapshot(pageOrderRef.current, deletedPagesRef.current, historyDelta);
-
-        if (wasDeleted) {
-            currentDeleted.delete(pageIndex);
-        } else {
-            currentDeleted.add(pageIndex);
-        }
-
-        deletedPagesRef.current = currentDeleted;
-        setDeletedPages(currentDeleted);
-    };
-
-    const movePage = (fromIndex, toIndex) => {
-        if (fromIndex === toIndex) return;
-        const currentOrder = pageOrderRef.current;
-        if (toIndex < 0 || toIndex >= currentOrder.length) return;
-        const movedPageIndex = currentOrder[fromIndex];
-        if (movedPageIndex === undefined) return;
-        const historyDelta = addMoveHistory(movedPageIndex, fromIndex + 1, toIndex + 1);
-        pushActionSnapshot(currentOrder, deletedPagesRef.current, historyDelta);
-
-        const nextOrder = [...currentOrder];
-        const [moved] = nextOrder.splice(fromIndex, 1);
-        nextOrder.splice(toIndex, 0, moved);
-
-        pageOrderRef.current = nextOrder;
-        setPageOrder(nextOrder);
-    };
-
-    const handleDropOnTile = (targetIndex) => {
-        if (draggedIndex === null) return;
-        if (draggedIndex === targetIndex) {
-            setDraggedIndex(null);
-            return;
-        }
-        movePage(draggedIndex, targetIndex);
-        setDraggedIndex(null);
-    };
-
-    const undoLastChange = () => {
-        if (!undoStack.length) return;
-        const lastAction = undoStack[undoStack.length - 1];
-        setUndoStack((prev) => prev.slice(0, -1));
-        const restoredDeleted = new Set(lastAction.deletedPages);
-        pageOrderRef.current = [...lastAction.pageOrder];
-        deletedPagesRef.current = restoredDeleted;
-        setPageOrder(lastAction.pageOrder);
-        setDeletedPages(restoredDeleted);
-
-        if (lastAction.historyDelta?.type === 'added') {
-            removeHistoryById(lastAction.historyDelta.entry.id);
-        } else if (lastAction.historyDelta?.type === 'removed') {
-            prependHistoryEntry(lastAction.historyDelta.entry);
-        }
-    };
+    const keptCount = state.order.length - state.removed.length;
+    const hasCustomOrder = state.order.some((pageIndex, idx) => pageIndex !== idx);
+    const changed = hasCustomOrder || state.removed.length > 0;
 
     const organizePDF = async () => {
         if (!file || !numPages) return;
-
-        if (deletedPages.size === numPages) {
-            setError('You cannot delete all pages. Please keep at least one page.');
+        if (!keptCount) {
+            setError('You cannot remove every page. Keep at least one.');
             return;
         }
 
@@ -221,19 +89,13 @@ export default function OrganizePdfPage() {
             setIsProcessing(true);
             setError('');
 
-            const fileBuffer = await file.arrayBuffer();
-            const originalPdf = await PDFDocument.load(fileBuffer);
+            const originalPdf = await PDFDocument.load(await file.arrayBuffer());
             const newPdf = await PDFDocument.create();
+            const pagesToKeep = state.order.filter((pageIndex) => !removed.has(pageIndex));
+            (await newPdf.copyPages(originalPdf, pagesToKeep)).forEach((page) => newPdf.addPage(page));
 
-            const pagesToKeep = pageOrder.filter((pageIndex) => !deletedPages.has(pageIndex));
-
-            const copiedPages = await newPdf.copyPages(originalPdf, pagesToKeep);
-            copiedPages.forEach((page) => {
-                newPdf.addPage(page);
-            });
-
-            const newPdfBytes = await newPdf.save();
-            downloadPdfBytes(newPdfBytes, `organized_${file.name}`);
+            downloadPdfBytes(await newPdf.save(), `${stripExtension(file.name)}_organized.pdf`);
+            setResult(`Saved ${pagesToKeep.length} ${pagesToKeep.length === 1 ? 'page' : 'pages'} — downloaded.`);
 
             const user = auth.currentUser;
             if (user) {
@@ -241,309 +103,101 @@ export default function OrganizePdfPage() {
             }
         } catch (err) {
             console.error(err);
-            setError('An error occurred while organizing the PDF.');
+            setError(err?.name === 'EncryptedPDFError' ? 'This PDF is password protected. Unlock it first.' : 'An error occurred while organizing the PDF.');
         } finally {
             setIsProcessing(false);
         }
     };
 
-    const hasCustomOrder = numPages && pageOrder.some((pageIndex, idx) => pageIndex !== idx);
-
     return (
-        <div style={{ maxWidth: '1000px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <div style={{ textAlign: 'center', marginBottom: '10px' }}>
-                <h1 style={{ fontSize: '2.5rem', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-                    <div style={{ color: '#E53E3E', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#E53E3E15', padding: '12px', borderRadius: '12px' }}>
-                        <LayoutGrid size={32} />
-                    </div>
-                    Organize PDF
-                </h1>
-                <p className="muted" style={{ fontSize: '1.1rem' }}>Drag and drop pages to reorder them, or mark pages for deletion before exporting.</p>
-            </div>
-
-            {!file ? (
-                <div
-                    onDragEnter={handleDrag}
-                    onDragLeave={handleDrag}
-                    onDragOver={handleDrag}
-                    onDrop={handleDrop}
-                    style={{
-                        border: `2px dashed ${dragActive ? 'var(--accent)' : 'var(--line)'}`,
-                        borderRadius: '16px',
-                        padding: '60px 20px',
-                        textAlign: 'center',
-                        background: dragActive ? 'var(--surface)' : 'var(--bg-soft)',
-                        transition: 'all 0.2s ease',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: '16px',
-                        maxWidth: '600px',
-                        margin: '0 auto',
-                        width: '100%'
-                    }}
-                    onClick={() => fileInputRef.current?.click()}
-                >
-                    <div style={{ background: 'var(--surface)', padding: '20px', borderRadius: '50%', boxShadow: 'var(--shadow)' }}>
-                        <FilePlus2 size={40} color="var(--accent)" />
-                    </div>
-                    <div>
-                        <h3 style={{ margin: '0 0 8px', fontSize: '1.4rem' }}>Select PDF file</h3>
-                        <p className="muted" style={{ margin: 0 }}>or drop PDF here</p>
-                    </div>
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="application/pdf,.pdf"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                            if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
-                            e.target.value = '';
-                        }}
-                    />
-                </div>
-            ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface)', border: '1px solid var(--line)', padding: '16px 20px', borderRadius: '12px', boxShadow: 'var(--shadow)' }}>
-                        <div>
-                            <h3 style={{ margin: '0 0 4px', fontSize: '1.1rem' }}>{file.name}</h3>
-                            <p className="muted small" style={{ margin: 0 }}>
-                                {numPages ? `${numPages} pages total` : 'Loading...'}
-                                {hasCustomOrder && ' • custom order applied'}
-                                {deletedPages.size > 0 && ` • ${deletedPages.size} marked for deletion`}
-                            </p>
+        <ToolShell
+            toolId="organize-pdf"
+            stage={file ? 'work' : 'select'}
+            error={error}
+            onReset={() => { setFile(null); setError(''); setResult(''); }}
+            dropzone={{ accept: 'application/pdf,.pdf', onFiles: handleFiles, title: 'Select a PDF', hint: 'or drop it here' }}
+            workspaceTitle={file?.name}
+            workspaceSubtitle={file ? `${numPages ?? '…'} pages · ${formatFileSize(file.size)} · drag pages to reorder` : null}
+            workspaceActions={
+                <>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={undo} disabled={!undoStack.length || isProcessing}>
+                        <Undo2 size={15} /> Undo
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={resetOrder} disabled={!changed || isProcessing}>
+                        <RotateCcw size={15} /> Reset
+                    </button>
+                </>
+            }
+            panel={{
+                subtitle: changed ? 'Unsaved changes' : 'Reorder or remove pages',
+                body: (
+                    <>
+                        <div className="summary-list">
+                            <div><span>Pages kept</span><strong>{numPages ? `${keptCount} of ${numPages}` : '—'}</strong></div>
+                            <div><span>Removed</span><strong>{state.removed.length}</strong></div>
+                            <div><span>Order</span><strong>{hasCustomOrder ? 'Custom' : 'Original'}</strong></div>
                         </div>
-
-                        <div style={{ display: 'flex', gap: '12px' }}>
-                            <button onClick={() => setFile(null)} className="ghost-btn">
-                                <X size={16} /> Cancel
-                            </button>
-                            <button
-                                onClick={undoLastChange}
-                                disabled={!undoStack.length || isProcessing}
-                                className="ghost-btn"
-                            >
-                                <Undo2 size={16} /> Undo
-                            </button>
-                            <button
-                                onClick={organizePDF}
-                                disabled={isProcessing || !numPages || deletedPages.size === numPages}
-                                className="primary-btn"
-                                style={{ background: '#E53E3E', opacity: (isProcessing || !numPages || deletedPages.size === numPages) ? 0.6 : 1 }}
-                            >
-                                {isProcessing ? <><RefreshCw size={16} className="spin" /> Exporting...</> : 'Export New PDF'}
-                            </button>
-                        </div>
-                    </div>
-
-                    {error && <p className="error-text" style={{ textAlign: 'center' }}>{error}</p>}
-
-                    <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                        <div style={{
-                            background: 'var(--surface-2)',
-                            border: '1px solid var(--line)',
-                            borderRadius: '12px',
-                            padding: '24px',
-                            minHeight: '400px',
-                            flex: '1 1 620px',
-                            minWidth: '280px'
-                        }}>
-                            <Document
-                                file={file}
-                                onLoadSuccess={({ numPages }) => {
-                                    setNumPages(numPages);
-                                    const initialOrder = Array.from({ length: numPages }, (_, i) => i);
-                                    setPageOrder(initialOrder);
-                                    pageOrderRef.current = initialOrder;
-                                    deletedPagesRef.current = new Set();
-                                    const loadedEntry = {
-                                        id: crypto.randomUUID(),
-                                        text: `${new Date().toLocaleTimeString()} - Loaded ${numPages} pages`,
-                                        kind: 'system',
-                                    };
-                                    setChangeHistory([loadedEntry]);
-                                    changeHistoryRef.current = [loadedEntry];
-                                    setUndoStack([]);
-                                }}
-                                onLoadError={() => setError('Failed to load PDF. It might be corrupted or encrypted.')}
-                                loading={<p className="muted" style={{ textAlign: 'center' }}>Loading document...</p>}
-                            >
-                                {numPages && pageOrder.length > 0 && (
-                                    <div style={{
-                                        display: 'grid',
-                                        gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-                                        gap: '24px'
-                                    }}>
-                                        {pageOrder.map((pageIndex, displayIndex) => {
-                                            const isDeleted = deletedPages.has(pageIndex);
-                                            return (
-                                                <div
-                                                    key={`page_${pageIndex + 1}_${displayIndex}`}
-                                                    draggable
-                                                    onDragStart={() => setDraggedIndex(displayIndex)}
-                                                    onDragEnd={() => setDraggedIndex(null)}
-                                                    onDragOver={(e) => e.preventDefault()}
-                                                    onDrop={() => handleDropOnTile(displayIndex)}
-                                                    style={{
-                                                        display: 'flex',
-                                                        flexDirection: 'column',
-                                                        alignItems: 'center',
-                                                        gap: '8px',
-                                                        transition: 'transform 0.15s ease',
-                                                        opacity: draggedIndex === displayIndex ? 0.6 : 1,
-                                                        cursor: 'grab'
-                                                    }}
-                                                >
-                                                    <div style={{
-                                                        position: 'relative',
-                                                        border: isDeleted ? '3px solid var(--danger)' : '1px solid var(--line)',
-                                                        borderRadius: '8px',
-                                                        overflow: 'hidden',
-                                                        boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-                                                        opacity: isDeleted ? 0.5 : 1
-                                                    }}>
-                                                        <div style={{
-                                                            position: 'absolute',
-                                                            top: '8px',
-                                                            left: '8px',
-                                                            zIndex: 3,
-                                                            display: 'flex',
-                                                            gap: '4px'
-                                                        }}>
-                                                            <button
-                                                                type="button"
-                                                                className="ghost-btn"
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    handleMoveUp(displayIndex);
-                                                                }}
-                                                                disabled={displayIndex === 0}
-                                                                style={{ minHeight: '28px', padding: '0 8px', borderRadius: '8px', background: 'var(--surface)' }}
-                                                                aria-label="Move page up"
-                                                            >
-                                                                <ChevronUp size={14} />
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                className="ghost-btn"
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    handleMoveDown(displayIndex);
-                                                                }}
-                                                                disabled={displayIndex === pageOrder.length - 1}
-                                                                style={{ minHeight: '28px', padding: '0 8px', borderRadius: '8px', background: 'var(--surface)' }}
-                                                                aria-label="Move page down"
-                                                            >
-                                                                <ChevronDown size={14} />
-                                                            </button>
-                                                        </div>
-
-                                                        <button
-                                                            type="button"
-                                                            className="ghost-btn"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                handleToggleDelete(pageIndex);
-                                                            }}
-                                                            style={{
-                                                                position: 'absolute',
-                                                                top: '8px',
-                                                                right: '8px',
-                                                                zIndex: 3,
-                                                                minHeight: '28px',
-                                                                width: '28px',
-                                                                padding: 0,
-                                                                borderRadius: '50%',
-                                                                background: isDeleted ? 'var(--surface)' : 'var(--danger)',
-                                                                color: isDeleted ? 'var(--ink)' : '#fff'
-                                                            }}
-                                                            aria-label={isDeleted ? 'Restore page' : 'Mark page for deletion'}
-                                                        >
-                                                            <Trash2 size={14} />
-                                                        </button>
-
-                                                        <Page
-                                                            pageNumber={pageIndex + 1}
-                                                            width={160}
-                                                            renderTextLayer={false}
-                                                            renderAnnotationLayer={false}
-                                                            loading={<div style={{ width: 160, height: 226, background: 'var(--surface)' }} />}
-                                                        />
-
-                                                        {isDeleted && (
-                                                            <div style={{
-                                                                position: 'absolute',
-                                                                top: 0, left: 0, right: 0, bottom: 0,
-                                                                background: 'rgba(200, 50, 50, 0.2)',
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                justifyContent: 'center',
-                                                                pointerEvents: 'none'
-                                                            }}>
-                                                                <div style={{ background: 'var(--danger)', color: '#fff', padding: '12px', borderRadius: '50%' }}>
-                                                                    <Trash2 size={24} />
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                    <span style={{ fontSize: '0.9rem', fontWeight: 500, color: isDeleted ? 'var(--danger)' : 'var(--ink)' }}>
-                                                        Position {displayIndex + 1} • Page {pageIndex + 1}
-                                                    </span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </Document>
-                        </div>
-
-                        <aside style={{
-                            border: '1px solid var(--line)',
-                            background: 'var(--surface)',
-                            borderRadius: '12px',
-                            padding: '16px',
-                            width: '280px',
-                            maxHeight: '560px',
-                            overflow: 'hidden',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '10px'
-                        }}>
-                            <h3 style={{ margin: 0, fontSize: '1rem' }}>Change History</h3>
-                            <p className="muted small" style={{ margin: 0 }}>
-                                Tracks moves and delete/restore actions.
-                            </p>
-                            <div style={{
-                                borderTop: '1px solid var(--line)',
-                                paddingTop: '10px',
-                                overflowY: 'auto',
-                                display: 'grid',
-                                gap: '8px'
-                            }}>
-                                {changeHistory.length ? (
-                                    changeHistory.map((entry, idx) => (
-                                        <p key={`${entry.id}_${idx}`} className="small" style={{
-                                            margin: 0,
-                                            padding: '8px',
-                                            borderRadius: '8px',
-                                            background: 'var(--surface-2)',
-                                            border: '1px solid var(--line)',
-                                            lineHeight: 1.4
-                                        }}>
-                                            {entry.text}
-                                        </p>
-                                    ))
-                                ) : (
-                                    <p className="muted small" style={{ margin: 0 }}>No changes yet.</p>
-                                )}
+                        {log.length ? (
+                            <div className="field">
+                                <span className="field-label">Changes</span>
+                                <div className="history-list">
+                                    {log.map((entry, idx) => <p key={`${idx}-${entry}`}>{entry}</p>)}
+                                </div>
                             </div>
-                        </aside>
+                        ) : null}
+                    </>
+                ),
+                result,
+                action: { label: 'Save new PDF', icon: LayoutGrid, busyLabel: 'Saving…', onClick: organizePDF, disabled: !numPages || !keptCount, busy: isProcessing },
+            }}
+        >
+            {file ? (
+                <Document
+                    file={file}
+                    onLoadSuccess={({ numPages: n }) => {
+                        setNumPages(n);
+                        setState({ order: Array.from({ length: n }, (_, i) => i), removed: [] });
+                    }}
+                    onLoadError={() => setError('Failed to load PDF. It might be corrupted or encrypted.')}
+                    loading={<div className="skeleton" style={{ height: 240 }} />}
+                >
+                    <div className="page-grid">
+                        {state.order.map((pageIndex, position) => {
+                            const isRemoved = removed.has(pageIndex);
+                            return (
+                                <div
+                                    key={pageIndex}
+                                    className={`page-tile ${isRemoved ? 'is-removed' : ''} ${stateClass(position)}`}
+                                    {...itemProps(position)}
+                                    style={{ cursor: 'grab' }}
+                                >
+                                    <div className="page-tile-frame">
+                                        <div className="page-tile-sheet"><LazyPage pageNumber={pageIndex + 1} width={130} /></div>
+                                        {isRemoved ? (
+                                            <span className="removed-flag"><span className="badge" style={{ color: 'var(--danger)', borderColor: 'var(--danger-line)', background: 'var(--danger-soft)' }}>Removed</span></span>
+                                        ) : null}
+                                    </div>
+                                    <div className="page-tile-tools">
+                                        <button type="button" className="tile-btn" onClick={() => movePage(position, position - 1)} disabled={position === 0} aria-label="Move earlier">
+                                            <ArrowLeft size={14} />
+                                        </button>
+                                        <button type="button" className="tile-btn" onClick={() => movePage(position, position + 1)} disabled={position === state.order.length - 1} aria-label="Move later">
+                                            <ArrowRight size={14} />
+                                        </button>
+                                        <button type="button" className={`tile-btn danger ${isRemoved ? 'on' : ''}`} onClick={() => toggleRemove(pageIndex)} aria-label={isRemoved ? `Restore page ${pageIndex + 1}` : `Remove page ${pageIndex + 1}`} aria-pressed={isRemoved}>
+                                            <Trash2 size={14} />
+                                        </button>
+                                    </div>
+                                    <span className="page-tile-label">
+                                        {position + 1}
+                                        {pageIndex !== position ? <span className="muted"> · was {pageIndex + 1}</span> : null}
+                                    </span>
+                                </div>
+                            );
+                        })}
                     </div>
-
-                </div>
-            )}
-        </div>
+                </Document>
+            ) : null}
+        </ToolShell>
     );
 }

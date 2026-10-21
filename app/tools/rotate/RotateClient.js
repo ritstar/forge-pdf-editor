@@ -1,16 +1,17 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { PDFDocument, degrees } from 'pdf-lib';
-import { Document, Page } from 'react-pdf';
+import { Document } from 'react-pdf';
+import { RotateCcw, RotateCw, Undo2 } from 'lucide-react';
 import '@/app/utils/pdfWorker';
+import ToolShell from '@/app/components/ToolShell';
+import LazyPage from '@/app/components/ui/LazyPage';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
 import { downloadPdfBytes, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
-import { FilePlus2, RotateCw, RefreshCw, X } from 'lucide-react';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
 
+const normalize = (deg) => ((deg % 360) + 360) % 360;
 
 export default function RotateClient() {
     const [file, setFile] = useState(null);
@@ -18,89 +19,55 @@ export default function RotateClient() {
     const [pageRotations, setPageRotations] = useState({});
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState('');
-    const [dragActive, setDragActive] = useState(false);
-    const fileInputRef = useRef(null);
+    const [result, setResult] = useState('');
 
-    const handleFile = (selectedFile) => {
+    const handleFiles = ([selectedFile]) => {
         setError('');
+        setResult('');
         if (!isPdfFile(selectedFile)) {
             setError('Please select a valid PDF file.');
             return;
         }
-
         setFile(selectedFile);
+        setNumPages(null);
         setPageRotations({});
     };
 
-    const handleDrag = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.type === 'dragenter' || e.type === 'dragover') {
-            setDragActive(true);
-        } else if (e.type === 'dragleave') {
-            setDragActive(false);
-        }
+    const rotatePage = (index, delta) => {
+        setResult('');
+        setPageRotations((prev) => ({ ...prev, [index]: (prev[index] || 0) + delta }));
     };
 
-    const handleDrop = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setDragActive(false);
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            handleFile(e.dataTransfer.files[0]);
-        }
-    };
-
-    const rotatePage = (index) => {
-        setPageRotations(prev => {
-            const currentRotation = prev[index] || 0;
-            return {
-                ...prev,
-                [index]: (currentRotation + 90) % 360
-            };
-        });
-    };
-
-    const rotateAll = () => {
+    const rotateAll = (delta) => {
         if (!numPages) return;
-        setPageRotations(prev => {
+        setResult('');
+        setPageRotations((prev) => {
             const next = {};
-            for (let i = 0; i < numPages; i++) {
-                const current = prev[i] || 0;
-                next[i] = (current + 90) % 360;
-            }
+            for (let i = 0; i < numPages; i++) next[i] = (prev[i] || 0) + delta;
             return next;
         });
     };
 
-    const applyRotation = async () => {
-        if (!file || !numPages) return;
+    const rotatedCount = Object.values(pageRotations).filter((r) => normalize(r) !== 0).length;
 
-        // Check if any page actually has non-zero rotation
-        const hasRotation = Object.values(pageRotations).some(r => r > 0);
-        if (!hasRotation) {
-            setError('No pages have been rotated. Please rotate at least one page.');
-            return;
-        }
+    const applyRotation = async () => {
+        if (!file || !numPages || !rotatedCount) return;
 
         try {
             setIsProcessing(true);
             setError('');
+            setResult('');
 
-            const fileBuffer = await file.arrayBuffer();
-            const pdf = await PDFDocument.load(fileBuffer);
-
-            const pages = pdf.getPages();
-            pages.forEach((page, i) => {
-                const customRotation = pageRotations[i] || 0;
-                if (customRotation > 0) {
-                    const currentRotation = page.getRotation().angle;
-                    page.setRotation(degrees((((currentRotation + customRotation) % 360) + 360) % 360));
+            const pdf = await PDFDocument.load(await file.arrayBuffer());
+            pdf.getPages().forEach((page, i) => {
+                const customRotation = normalize(pageRotations[i] || 0);
+                if (customRotation) {
+                    page.setRotation(degrees(normalize(page.getRotation().angle + customRotation)));
                 }
             });
 
-            const newPdfBytes = await pdf.save();
-            downloadPdfBytes(newPdfBytes, `rotated_${file.name}`);
+            downloadPdfBytes(await pdf.save(), `${stripExtension(file.name)}_rotated.pdf`);
+            setResult(`Rotated ${rotatedCount} ${rotatedCount === 1 ? 'page' : 'pages'} — downloaded.`);
 
             const user = auth.currentUser;
             if (user) {
@@ -108,194 +75,78 @@ export default function RotateClient() {
             }
         } catch (err) {
             console.error(err);
-            setError('An error occurred while rotating the PDF pages.');
+            setError(err?.name === 'EncryptedPDFError' ? 'This PDF is password protected. Unlock it first.' : 'An error occurred while rotating the PDF pages.');
         } finally {
             setIsProcessing(false);
         }
     };
 
     return (
-        <div style={{ maxWidth: '1000px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <div style={{ textAlign: 'center', marginBottom: '10px' }}>
-                <h1 style={{ fontSize: '2.5rem', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-                    <div style={{ color: '#3182CE', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#3182CE15', padding: '12px', borderRadius: '12px' }}>
-                        <RotateCw size={32} />
+        <ToolShell
+            toolId="rotate-pdf"
+            stage={file ? 'work' : 'select'}
+            error={error}
+            onReset={() => { setFile(null); setPageRotations({}); setError(''); setResult(''); }}
+            dropzone={{ accept: 'application/pdf,.pdf', onFiles: handleFiles, title: 'Select a PDF', hint: 'or drop it here' }}
+            workspaceTitle={file?.name}
+            workspaceSubtitle={file ? `${numPages ?? '…'} pages · ${formatFileSize(file.size)} · hover a page to rotate it` : null}
+            panel={{
+                subtitle: rotatedCount ? `${rotatedCount} ${rotatedCount === 1 ? 'page' : 'pages'} will be rotated` : 'Rotate pages, then apply',
+                body: (
+                    <div className="field">
+                        <span className="field-label">All pages</span>
+                        <div className="panel-row">
+                            <button type="button" className="btn btn-secondary" onClick={() => rotateAll(-90)} disabled={!numPages}>
+                                <RotateCcw size={16} /> Left
+                            </button>
+                            <button type="button" className="btn btn-secondary" onClick={() => rotateAll(90)} disabled={!numPages}>
+                                <RotateCw size={16} /> Right
+                            </button>
+                        </div>
+                        <button type="button" className="btn btn-ghost" onClick={() => setPageRotations({})} disabled={!rotatedCount}>
+                            <Undo2 size={16} /> Reset all
+                        </button>
                     </div>
-                    Rotate PDF
-                </h1>
-                <p className="muted" style={{ fontSize: '1.1rem' }}>Rotate your PDFs the way you need them. Click a page to rotate it.</p>
-            </div>
-
-            {!file ? (
-                <div
-                    onDragEnter={handleDrag}
-                    onDragLeave={handleDrag}
-                    onDragOver={handleDrag}
-                    onDrop={handleDrop}
-                    style={{
-                        border: `2px dashed ${dragActive ? 'var(--accent)' : 'var(--line)'}`,
-                        borderRadius: '16px',
-                        padding: '60px 20px',
-                        textAlign: 'center',
-                        background: dragActive ? 'var(--surface)' : 'var(--bg-soft)',
-                        transition: 'all 0.2s ease',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: '16px',
-                        maxWidth: '600px',
-                        margin: '0 auto',
-                        width: '100%'
-                    }}
-                    onClick={() => fileInputRef.current?.click()}
+                ),
+                result,
+                action: { label: 'Apply rotation', icon: RotateCw, busyLabel: 'Rotating…', onClick: applyRotation, disabled: !rotatedCount, busy: isProcessing },
+                footnote: rotatedCount ? null : 'Rotate at least one page to continue.',
+            }}
+        >
+            {file ? (
+                <Document
+                    file={file}
+                    onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+                    onLoadError={() => setError('Failed to load PDF. It might be corrupted or encrypted.')}
+                    loading={<div className="skeleton" style={{ height: 240 }} />}
                 >
-                    <div style={{ background: 'var(--surface)', padding: '20px', borderRadius: '50%', boxShadow: 'var(--shadow)' }}>
-                        <FilePlus2 size={40} color="var(--accent)" />
-                    </div>
-                    <div>
-                        <h3 style={{ margin: '0 0 8px', fontSize: '1.4rem' }}>Select PDF file</h3>
-                        <p className="muted" style={{ margin: 0 }}>or drop PDF here</p>
-                    </div>
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="application/pdf,.pdf"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                            if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
-                            e.target.value = '';
-                        }}
-                    />
-                </div>
-            ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface)', border: '1px solid var(--line)', padding: '16px 20px', borderRadius: '12px', boxShadow: 'var(--shadow)', flexWrap: 'wrap', gap: '12px' }}>
-                        <div>
-                            <h3 style={{ margin: '0 0 4px', fontSize: '1.1rem' }}>{file.name}</h3>
-                            <p className="muted small" style={{ margin: 0 }}>
-                                {numPages ? `${numPages} pages total` : 'Loading...'}
-                            </p>
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                            <button onClick={() => setFile(null)} className="ghost-btn">
-                                <X size={16} /> Cancel
-                            </button>
-                            <button
-                                onClick={rotateAll}
-                                disabled={!numPages}
-                                className="ghost-btn"
-                                style={{ color: '#3182CE', borderColor: '#3182CE30', background: '#3182CE05' }}
-                            >
-                                <RotateCw size={16} /> Rotate All Pages
-                            </button>
-                            <button
-                                onClick={applyRotation}
-                                disabled={isProcessing || !numPages}
-                                className="primary-btn"
-                                style={{ background: '#3182CE', opacity: (isProcessing || !numPages) ? 0.6 : 1 }}
-                            >
-                                {isProcessing ? <><RefreshCw size={16} className="spin" /> Exporting...</> : 'Export New PDF'}
-                            </button>
-                        </div>
-                    </div>
-
-                    {error && <p className="error-text" style={{ textAlign: 'center' }}>{error}</p>}
-
-                    <div style={{
-                        background: 'var(--surface-2)',
-                        border: '1px solid var(--line)',
-                        borderRadius: '12px',
-                        padding: '24px',
-                        minHeight: '400px'
-                    }}>
-                        <Document
-                            file={file}
-                            onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-                            onLoadError={() => setError('Failed to load PDF. It might be corrupted or encrypted.')}
-                            loading={<p className="muted" style={{ textAlign: 'center' }}>Loading document...</p>}
-                        >
-                            {numPages && (
-                                <div style={{
-                                    display: 'grid',
-                                    gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-                                    gap: '24px'
-                                }}>
-                                    {Array.from(new Array(numPages), (el, index) => {
-                                        const rotation = pageRotations[index] || 0;
-                                        return (
-                                            <div
-                                                key={`page_${index + 1}`}
-                                                onClick={() => rotatePage(index)}
-                                                style={{
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                    alignItems: 'center',
-                                                    gap: '12px',
-                                                    cursor: 'pointer',
-                                                }}
-                                            >
-                                                <div className="hover-rotate-container" style={{
-                                                    position: 'relative',
-                                                    border: '1px solid var(--line)',
-                                                    borderRadius: '8px',
-                                                    overflow: 'visible',
-                                                    background: 'white',
-                                                    boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-                                                    transform: `rotate(${rotation}deg)`,
-                                                    transition: 'transform 0.3s ease',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    justifyContent: 'center',
-                                                    width: 160,
-                                                    height: 226,
-                                                }}>
-                                                    <Page
-                                                        pageNumber={index + 1}
-                                                        height={226}
-                                                        width={160}
-                                                        renderTextLayer={false}
-                                                        renderAnnotationLayer={false}
-                                                        loading={<div style={{ width: 160, height: 226, background: 'var(--surface)' }} />}
-                                                    />
-
-                                                    {/* Hover Action Overlay */}
-                                                    <div className="hover-action" style={{
-                                                        position: 'absolute',
-                                                        top: '50%', left: '50%',
-                                                        transform: 'translate(-50%, -50%)',
-                                                        background: 'rgba(49, 130, 206, 0.9)',
-                                                        color: '#fff',
-                                                        padding: '16px',
-                                                        borderRadius: '50%',
-                                                        opacity: 0,
-                                                        transition: 'opacity 0.2s',
-                                                        boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-                                                    }}>
-                                                        <RotateCw size={24} />
-                                                    </div>
-                                                </div>
-                                                <span style={{ fontSize: '0.9rem', fontWeight: 500, color: rotation > 0 ? '#3182CE' : 'var(--ink)' }}>
-                                                    Page {index + 1}
-                                                </span>
-
-                                                <style jsx>{`
-                          .hover-rotate-container:hover .hover-action {
-                            opacity: 1 !important;
-                          }
-                        `}</style>
-                                            </div>
-                                        );
-                                    })}
+                    <div className="page-grid">
+                        {Array.from({ length: numPages || 0 }, (_, index) => {
+                            const rotation = pageRotations[index] || 0;
+                            const quarter = normalize(rotation) % 180 !== 0;
+                            return (
+                                <div key={index} className="page-tile">
+                                    <div className="page-tile-frame">
+                                        <div className="page-tile-sheet" style={{ transform: `rotate(${rotation}deg) scale(${quarter ? 0.76 : 1})` }}>
+                                            <LazyPage pageNumber={index + 1} width={130} />
+                                        </div>
+                                        {normalize(rotation) ? <span className="badge badge-accent page-tile-badge">{normalize(rotation)}°</span> : null}
+                                    </div>
+                                    <div className="page-tile-tools">
+                                        <button type="button" className="tile-btn" onClick={() => rotatePage(index, -90)} aria-label={`Rotate page ${index + 1} left`}>
+                                            <RotateCcw size={14} />
+                                        </button>
+                                        <button type="button" className="tile-btn" onClick={() => rotatePage(index, 90)} aria-label={`Rotate page ${index + 1} right`}>
+                                            <RotateCw size={14} />
+                                        </button>
+                                    </div>
+                                    <span className="page-tile-label">Page {index + 1}</span>
                                 </div>
-                            )}
-                        </Document>
+                            );
+                        })}
                     </div>
-
-                </div>
-            )}
-        </div>
+                </Document>
+            ) : null}
+        </ToolShell>
     );
 }

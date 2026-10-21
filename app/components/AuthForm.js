@@ -12,7 +12,10 @@ import {
 } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase/config';
+import { ArrowLeft, CheckCircle2, Loader2 } from 'lucide-react';
 import ForgeLogo from './ForgeLogo';
+import ThemeToggle from './ui/ThemeToggle';
+import { TOOLS } from '@/lib/toolsData';
 
 const googleProvider = new GoogleAuthProvider();
 
@@ -162,70 +165,104 @@ export default function AuthForm({ mode, nextPath = '/app' }) {
   };
 
   return (
-    <main className="auth-page">
-      <section className="auth-card">
+    <div className="auth-shell">
+      <aside className="auth-aside">
         <ForgeLogo href="/" />
-        <h1>{isSignup ? 'Create account' : 'Welcome back'}</h1>
-        <p className="muted">{isSignup ? 'Start saving drafts and signatures to your workspace.' : 'Sign in to continue editing your PDFs.'}</p>
+        <div>
+          <h2>{isSignup ? 'Everything you need to get documents done.' : 'Pick up right where you left off.'}</h2>
+          <ul className="auth-points">
+            <li><CheckCircle2 size={18} /> Edit, fill and sign PDFs with reusable signatures</li>
+            <li><CheckCircle2 size={18} /> Drafts autosave to your private workspace</li>
+            <li><CheckCircle2 size={18} /> {TOOLS.length} tools to merge, compress, convert and protect</li>
+          </ul>
+        </div>
+        <p className="auth-aside-foot">© {new Date().getFullYear()} Forge PDF</p>
+      </aside>
 
-        <button className="google-btn wide" onClick={handleGoogle} disabled={loading}>
-          <GoogleLogo />
-          {loading ? 'Connecting...' : 'Continue with Google'}
-        </button>
+      <main className="auth-main">
+        <div className="auth-main-top">
+          <Link href="/" className="btn btn-ghost btn-sm"><ArrowLeft size={15} /> Home</Link>
+          <ThemeToggle />
+        </div>
+        <div className="auth-form-wrap">
+          <div className="auth-form">
+            <h1>{isSignup ? 'Create your account' : 'Welcome back'}</h1>
+            <p>{isSignup ? 'Free forever. No credit card required.' : 'Sign in to continue to your workspace.'}</p>
 
-        <div className="separator">or</div>
+            <div className="auth-stack">
+              <button type="button" className="btn btn-secondary google-btn" onClick={handleGoogle} disabled={loading}>
+                <GoogleLogo />
+                Continue with Google
+              </button>
 
-        <form onSubmit={handleSubmit} className="stack form-stack">
-          {isSignup ? (
-            <>
-              <label htmlFor="name" className="field-label">Full name</label>
-              <input
-                id="name"
-                className="field"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                autoComplete="name"
-                required
-              />
-            </>
-          ) : null}
+              <div className="separator">or continue with email</div>
 
-          <label htmlFor="email" className="field-label">Email</label>
-          <input
-            id="email"
-            type="email"
-            className="field"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            autoComplete="email"
-            required
-          />
+              <form onSubmit={handleSubmit} className="auth-stack" style={{ marginTop: 0 }} noValidate={false}>
+                {isSignup ? (
+                  <div className="field">
+                    <label htmlFor="name" className="field-label">Full name</label>
+                    <input
+                      id="name"
+                      className="input"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      autoComplete="name"
+                      placeholder="Alex Morgan"
+                      required
+                    />
+                  </div>
+                ) : null}
 
-          <label htmlFor="password" className="field-label">Password</label>
-          <input
-            id="password"
-            type="password"
-            className="field"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            autoComplete={isSignup ? 'new-password' : 'current-password'}
-            minLength={6}
-            required
-          />
+                <div className="field">
+                  <label htmlFor="email" className="field-label">Email</label>
+                  <input
+                    id="email"
+                    type="email"
+                    className="input"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    autoComplete="email"
+                    placeholder="you@company.com"
+                    required
+                  />
+                </div>
 
-          {error ? <p className="error-text">{error}</p> : null}
-          {message ? <p className="muted">{message}</p> : null}
+                <div className="field">
+                  <label htmlFor="password" className="field-label">Password</label>
+                  <input
+                    id="password"
+                    type="password"
+                    className="input"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete={isSignup ? 'new-password' : 'current-password'}
+                    placeholder={isSignup ? 'At least 6 characters' : '••••••••'}
+                    minLength={6}
+                    required
+                  />
+                </div>
 
-          <button className="primary-btn wide" type="submit" disabled={loading}>
-            {isSignup ? 'Sign up' : 'Sign in'}
-          </button>
-        </form>
+                {error ? <div className="alert alert-error" role="alert">{error}</div> : null}
+                {message ? <div className="alert alert-success" role="status">{message}</div> : null}
 
-        <p className="muted auth-switch">
-          {isSignup ? 'Already have an account?' : "Don't have an account?"}{' '}
-          <Link href={`${isSignup ? '/login' : '/signup'}${next !== '/app' ? `?next=${encodeURIComponent(next)}` : ''}`}>{isSignup ? 'Login' : 'Create one'}</Link>
-        </p>
-      </section>
-    </main>
+                <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={loading}>
+                  {loading ? <><Loader2 size={17} className="spin" /> Please wait…</> : isSignup ? 'Create account' : 'Sign in'}
+                </button>
+              </form>
+            </div>
+
+            <p className="auth-switch">
+              {isSignup ? 'Already have an account?' : "Don't have an account?"}{' '}
+              <Link href={`${isSignup ? '/login' : '/signup'}${next !== '/app' ? `?next=${encodeURIComponent(next)}` : ''}`}>{isSignup ? 'Sign in' : 'Create one'}</Link>
+            </p>
+            {isSignup ? (
+              <p className="auth-legal">
+                By creating an account you agree to the <Link href="/terms-of-service">Terms</Link> and <Link href="/privacy-policy">Privacy Policy</Link>.
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </main>
+    </div>
   );
 }

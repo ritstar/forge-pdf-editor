@@ -1,35 +1,40 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import { pdfjs } from '@/app/utils/pdfWorker';
+import { useEffect, useRef, useState } from 'react';
 import JSZip from 'jszip';
+import { Download, Image as ImageIcon } from 'lucide-react';
+import { pdfjs } from '@/app/utils/pdfWorker';
+import ToolShell from '@/app/components/ToolShell';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
-import { downloadBlob, isPdfFile, stripExtension } from '@/app/utils/files';
+import { downloadBlob, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
 import { renderPdfPageToBlob } from '@/app/utils/pdfToImage';
-import { FilePlus2, FileImage, Trash2, Download, Settings, RefreshCw, X } from 'lucide-react';
 
+const QUALITY = {
+    standard: { scale: 1.5, label: 'Standard', detail: '~108 DPI, smaller files' },
+    high: { scale: 2.5, label: 'High', detail: '~180 DPI, sharper text' },
+};
 
 export default function PdfToJpgClient() {
     const [file, setFile] = useState(null);
-    const [extractedImages, setExtractedImages] = useState([]);
+    const [images, setImages] = useState([]);
+    const [quality, setQuality] = useState('high');
+    const [format, setFormat] = useState('jpeg');
     const [isProcessing, setIsProcessing] = useState(false);
     const [progress, setProgress] = useState('');
     const [error, setError] = useState('');
-    const [dragActive, setDragActive] = useState(false);
-    const fileInputRef = useRef(null);
     const imagesRef = useRef([]);
 
     // Previews are object URLs backed by Blobs; release them whenever the set is replaced.
     const replaceImages = (next) => {
         imagesRef.current.forEach((img) => URL.revokeObjectURL(img.url));
         imagesRef.current = next;
-        setExtractedImages(next);
+        setImages(next);
     };
 
     useEffect(() => () => imagesRef.current.forEach((img) => URL.revokeObjectURL(img.url)), []);
 
-    const handleFile = (selectedFile) => {
+    const handleFiles = ([selectedFile]) => {
         setError('');
         if (!isPdfFile(selectedFile)) {
             setError('Please select a valid PDF file.');
@@ -39,26 +44,9 @@ export default function PdfToJpgClient() {
         replaceImages([]);
     };
 
-    const handleDrag = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.type === 'dragenter' || e.type === 'dragover') {
-            setDragActive(true);
-        } else if (e.type === 'dragleave') {
-            setDragActive(false);
-        }
-    };
+    const extension = format === 'jpeg' ? 'jpg' : 'png';
 
-    const handleDrop = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setDragActive(false);
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            handleFile(e.dataTransfer.files[0]);
-        }
-    };
-
-    const extractImages = async () => {
+    const convert = async () => {
         if (!file) return;
 
         let pdf;
@@ -67,29 +55,28 @@ export default function PdfToJpgClient() {
             setError('');
             replaceImages([]);
 
-            const fileBuffer = await file.arrayBuffer();
-            pdf = await pdfjs.getDocument({ data: fileBuffer }).promise;
+            pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
             const totalPages = pdf.numPages;
             const baseName = stripExtension(file.name);
-            const images = [];
+            const rendered = [];
 
             for (let i = 1; i <= totalPages; i++) {
-                setProgress(`Rendering page ${i} of ${totalPages}...`);
-                const blob = await renderPdfPageToBlob(pdf, i, { scale: 2, format: 'jpeg', quality: 0.9 });
-                images.push({
-                    id: i,
-                    blob,
-                    url: URL.createObjectURL(blob),
-                    name: `${baseName}_page_${i}.jpg`,
-                });
+                setProgress(`Rendering page ${i} of ${totalPages}…`);
+                const blob = await renderPdfPageToBlob(pdf, i, { scale: QUALITY[quality].scale, format, quality: 0.9 });
+                rendered.push({ id: i, blob, url: URL.createObjectURL(blob), name: `${baseName}_page_${i}.${extension}` });
             }
 
-            replaceImages(images);
+            replaceImages(rendered);
+
+            const user = auth.currentUser;
+            if (user) {
+                logToolAction(user.uid, 'pdf-to-jpg', 'PDF to JPG', file.name);
+            }
         } catch (err) {
             console.error(err);
             setError(err?.name === 'PasswordException'
                 ? 'This PDF is password protected. Unlock it first.'
-                : 'An error occurred while extracting images from the PDF.');
+                : 'An error occurred while converting the PDF.');
         } finally {
             pdf?.destroy();
             setProgress('');
@@ -98,191 +85,87 @@ export default function PdfToJpgClient() {
     };
 
     const downloadAll = async () => {
-        if (!extractedImages.length) return;
-
-        if (extractedImages.length === 1) {
-            downloadBlob(extractedImages[0].blob, extractedImages[0].name);
+        if (images.length === 1) {
+            downloadBlob(images[0].blob, images[0].name);
             return;
         }
 
         try {
             setIsProcessing(true);
+            setProgress('Creating ZIP…');
             const zip = new JSZip();
-
-            // JPEGs are already compressed; STORE avoids burning CPU on re-deflating them.
-            extractedImages.forEach((img) => {
-                zip.file(img.name, img.blob, { compression: 'STORE' });
-            });
-
-            const content = await zip.generateAsync({ type: 'blob' });
-            downloadBlob(content, `${stripExtension(file.name)}_images.zip`);
-
-            const user = auth.currentUser;
-            if (user) {
-                logToolAction(user.uid, 'pdf-to-jpg', 'PDF to JPG', file.name);
-            }
+            // Images are already compressed; STORE avoids burning CPU on re-deflating them.
+            images.forEach((img) => zip.file(img.name, img.blob, { compression: 'STORE' }));
+            downloadBlob(await zip.generateAsync({ type: 'blob' }), `${stripExtension(file.name)}_images.zip`);
         } catch (err) {
             console.error(err);
             setError('Failed to create ZIP file.');
         } finally {
+            setProgress('');
             setIsProcessing(false);
         }
     };
 
+    const totalSize = images.reduce((sum, img) => sum + img.blob.size, 0);
+    const done = images.length > 0;
+
     return (
-        <div style={{ maxWidth: '1000px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <div style={{ textAlign: 'center', marginBottom: '10px' }}>
-                <h1 style={{ fontSize: '2.5rem', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-                    <div style={{ color: '#D69E2E', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#D69E2E15', padding: '12px', borderRadius: '12px' }}>
-                        <FileImage size={32} />
-                    </div>
-                    PDF to JPG
-                </h1>
-                <p className="muted" style={{ fontSize: '1.1rem' }}>Extract all pages from a PDF to high-quality JPG images.</p>
-            </div>
-
-            {!file ? (
-                <div
-                    onDragEnter={handleDrag}
-                    onDragLeave={handleDrag}
-                    onDragOver={handleDrag}
-                    onDrop={handleDrop}
-                    style={{
-                        border: `2px dashed ${dragActive ? 'var(--accent)' : 'var(--line)'}`,
-                        borderRadius: '16px',
-                        padding: '60px 20px',
-                        textAlign: 'center',
-                        background: dragActive ? 'var(--surface)' : 'var(--bg-soft)',
-                        transition: 'all 0.2s ease',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: '16px',
-                        maxWidth: '600px',
-                        margin: '0 auto',
-                        width: '100%'
-                    }}
-                    onClick={() => fileInputRef.current?.click()}
-                >
-                    <div style={{ background: 'var(--surface)', padding: '20px', borderRadius: '50%', boxShadow: 'var(--shadow)' }}>
-                        <FilePlus2 size={40} color="var(--accent)" />
-                    </div>
-                    <div>
-                        <h3 style={{ margin: '0 0 8px', fontSize: '1.4rem' }}>Select PDF file</h3>
-                        <p className="muted" style={{ margin: 0 }}>or drop PDF here</p>
-                    </div>
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="application/pdf,.pdf"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                            if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
-                            e.target.value = '';
-                        }}
-                    />
-                </div>
-            ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface)', border: '1px solid var(--line)', padding: '16px 20px', borderRadius: '12px', boxShadow: 'var(--shadow)', flexWrap: 'wrap', gap: '12px' }}>
-                        <div>
-                            <h3 style={{ margin: '0 0 4px', fontSize: '1.1rem' }}>{file.name}</h3>
-                            <p className="muted small" style={{ margin: 0 }}>
-                                {(file.size / 1024 / 1024).toFixed(2)} MB
-                            </p>
+        <ToolShell
+            toolId="pdf-to-jpg"
+            stage={file ? 'work' : 'select'}
+            error={error}
+            onReset={() => { setFile(null); replaceImages([]); setError(''); }}
+            dropzone={{ accept: 'application/pdf,.pdf', onFiles: handleFiles, title: 'Select a PDF', hint: 'or drop it here' }}
+            workspaceTitle={done ? `${images.length} images` : file?.name}
+            workspaceSubtitle={done ? `${formatFileSize(totalSize)} total · click an image to download it` : file ? formatFileSize(file.size) : null}
+            panel={{
+                subtitle: 'Export every page as an image',
+                body: (
+                    <>
+                        <div className="field">
+                            <span className="field-label">Format</span>
+                            <div className="segmented" role="group" aria-label="Format">
+                                <button type="button" aria-pressed={format === 'jpeg'} onClick={() => { setFormat('jpeg'); replaceImages([]); }}>JPG</button>
+                                <button type="button" aria-pressed={format === 'png'} onClick={() => { setFormat('png'); replaceImages([]); }}>PNG</button>
+                            </div>
                         </div>
-
-                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                            <button onClick={() => { setFile(null); replaceImages([]); }} className="ghost-btn">
-                                <X size={16} /> Cancel
-                            </button>
-
-                            {!extractedImages.length ? (
-                                <button
-                                    onClick={extractImages}
-                                    disabled={isProcessing}
-                                    className="primary-btn"
-                                    style={{ background: '#D69E2E', opacity: isProcessing ? 0.6 : 1 }}
-                                >
-                                    {isProcessing ? <><RefreshCw size={16} className="spin" /> {progress || 'Extracting...'}</> : 'Convert to JPG'}
-                                </button>
-                            ) : (
-                                <button
-                                    onClick={downloadAll}
-                                    disabled={isProcessing}
-                                    className="primary-btn"
-                                    style={{ background: '#38A169', opacity: isProcessing ? 0.6 : 1 }}
-                                >
-                                    <Download size={16} /> {extractedImages.length > 1 ? 'Download All (ZIP)' : 'Download Image'}
-                                </button>
-                            )}
-                        </div>
-                    </div>
-
-                    {error && <p className="error-text" style={{ textAlign: 'center' }}>{error}</p>}
-
-                    {extractedImages.length > 0 && (
-                        <div style={{
-                            background: 'var(--surface-2)',
-                            border: '1px solid var(--line)',
-                            borderRadius: '12px',
-                            padding: '24px'
-                        }}>
-                            <div style={{
-                                display: 'grid',
-                                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-                                gap: '24px'
-                            }}>
-                                {extractedImages.map((img) => (
-                                    <div
-                                        key={`page_${img.id}`}
-                                        style={{
-                                            display: 'flex',
-                                            flexDirection: 'column',
-                                            alignItems: 'center',
-                                            gap: '12px',
-                                            background: 'var(--surface)',
-                                            padding: '12px',
-                                            borderRadius: '12px',
-                                            border: '1px solid var(--line)',
-                                            boxShadow: '0 2px 8px rgba(0,0,0,0.03)'
-                                        }}
-                                    >
-                                        <div style={{
-                                            width: '100%',
-                                            borderRadius: '6px',
-                                            overflow: 'hidden',
-                                            border: '1px solid var(--line)'
-                                        }}>
-                                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                                            <img
-                                                src={img.url}
-                                                alt={img.name}
-                                                style={{ width: '100%', height: 'auto', display: 'block' }}
-                                            />
-                                        </div>
-                                        <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                            <span className="muted" style={{ fontSize: '0.85rem' }}>Page {img.id}</span>
-                                            <button
-                                                onClick={() => downloadBlob(img.blob, img.name)}
-                                                className="ghost-btn"
-                                                style={{ padding: '6px' }}
-                                                title="Download Image"
-                                                aria-label="Download Image"
-                                            >
-                                                <Download size={16} color="var(--accent)" />
-                                            </button>
-                                        </div>
-                                    </div>
+                        <div className="field">
+                            <span className="field-label">Quality</span>
+                            <div className="option-list" role="group" aria-label="Quality">
+                                {Object.entries(QUALITY).map(([key, q]) => (
+                                    <button key={key} type="button" className="option-card" aria-pressed={quality === key} onClick={() => { setQuality(key); replaceImages([]); }}>
+                                        <span className="option-dot" />
+                                        <span><strong>{q.label}</strong><span>{q.detail}</span></span>
+                                    </button>
                                 ))}
                             </div>
                         </div>
-                    )}
-
+                        {progress ? <p className="small muted" role="status">{progress}</p> : null}
+                    </>
+                ),
+                action: done
+                    ? { label: images.length === 1 ? 'Download image' : 'Download all (ZIP)', icon: Download, busyLabel: progress || 'Working…', onClick: downloadAll, busy: isProcessing }
+                    : { label: `Convert to ${format === 'jpeg' ? 'JPG' : 'PNG'}`, icon: ImageIcon, busyLabel: progress || 'Converting…', onClick: convert, busy: isProcessing },
+            }}
+        >
+            {done ? (
+                <div className="image-grid">
+                    {images.map((img) => (
+                        <button key={img.id} type="button" className="image-tile" onClick={() => downloadBlob(img.blob, img.name)} title={`Download ${img.name}`} style={{ textAlign: 'left' }}>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={img.url} alt={`Page ${img.id}`} />
+                            <span className="image-tile-name">Page {img.id} · {formatFileSize(img.blob.size)}</span>
+                            <span className="page-tile-tools"><span className="tile-btn"><Download size={14} /></span></span>
+                        </button>
+                    ))}
+                </div>
+            ) : (
+                <div className="empty-state">
+                    <span className="icon-tile lg" style={{ '--tile': 'var(--cat-convert-from)' }}><ImageIcon size={24} /></span>
+                    <h3>Ready to convert</h3>
+                    <p>Choose a format and quality, then convert. Every page becomes its own image.</p>
                 </div>
             )}
-        </div>
+        </ToolShell>
     );
 }
