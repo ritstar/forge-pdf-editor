@@ -15,7 +15,6 @@ import time
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
 from typing import Optional
-from urllib.parse import urlparse
 
 import pikepdf
 import pymupdf
@@ -28,7 +27,8 @@ from openpyxl.utils import get_column_letter
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from weasyprint import HTML, default_url_fetcher
+from weasyprint import HTML
+from weasyprint.urls import URLFetcher
 from docx import Document
 from docx.shared import Pt
 from pptx import Presentation
@@ -36,7 +36,7 @@ from pptx.util import Emu
 
 
 APP_TITLE = "Forge PDF Tools API"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 API_KEY_HEADER = "x-api-key"
 TOKEN_HEADER = "x-forge-token"
 API_KEY_ENV = "PDF_TOOLS_API_SECRET"
@@ -238,11 +238,10 @@ def _run(cmd: list[str], error_detail: str, **kwargs) -> subprocess.CompletedPro
     return proc
 
 
-def _safe_html_fetcher(url: str, *args, **kwargs):
-    parsed = urlparse(url)
-    if parsed.scheme != "data":
-        raise ValueError("External resources are not allowed for HTML to PDF conversion.")
-    return default_url_fetcher(url, *args, **kwargs)
+def _html_fetcher() -> URLFetcher:
+    # Only inline data: URLs; never fetch files or the network while rendering user HTML.
+    # A fresh fetcher per render because URLFetcher keeps per-request state.
+    return URLFetcher(allowed_protocols={"data"}, allow_redirects=False, timeout=5)
 
 
 def _open_pdf(input_path: Path) -> pymupdf.Document:
@@ -521,7 +520,7 @@ def run_tool(
                 raise HTTPException(status_code=400, detail="HTML input is too large.")
 
             output_path = tmpdir / f"{base_name}.pdf"
-            HTML(string=html_text, url_fetcher=_safe_html_fetcher).write_pdf(str(output_path))
+            HTML(string=html_text, url_fetcher=_html_fetcher()).write_pdf(str(output_path))
             return _as_download(output_path, output_path.name, tmpdir)
 
         if file is None:
