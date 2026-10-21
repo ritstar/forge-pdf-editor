@@ -1111,6 +1111,7 @@ select {
   pointer-events: auto;
   border: 2px solid transparent;
   user-select: none;
+  touch-action: none;
 }
 
 .image-item {
@@ -1180,6 +1181,38 @@ select {
   right: -6px;
   bottom: -6px;
   cursor: nwse-resize;
+}
+
+.resize-handle {
+  touch-action: none;
+}
+
+/* Bigger hit targets for fingers. */
+@media (pointer: coarse) {
+  .resize-handle {
+    width: 22px;
+    height: 22px;
+  }
+
+  .resize-handle.nw,
+  .resize-handle.sw {
+    left: -12px;
+  }
+
+  .resize-handle.ne,
+  .resize-handle.se {
+    right: -12px;
+  }
+
+  .resize-handle.nw,
+  .resize-handle.ne {
+    top: -12px;
+  }
+
+  .resize-handle.sw,
+  .resize-handle.se {
+    bottom: -12px;
+  }
 }
 
 .loading {

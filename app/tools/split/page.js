@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
+import { downloadPdfBytes, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
 import { FilePlus2, FileText, Trash2, Split, Settings } from 'lucide-react';
 
 export default function SplitPdfPage() {
@@ -18,7 +19,7 @@ export default function SplitPdfPage() {
 
     const handleFile = async (selectedFile) => {
         setError('');
-        if (selectedFile.type !== 'application/pdf') {
+        if (!isPdfFile(selectedFile)) {
             setError('Please select a valid PDF file.');
             return;
         }
@@ -31,7 +32,7 @@ export default function SplitPdfPage() {
             setFile({
                 obj: selectedFile,
                 name: selectedFile.name,
-                size: (selectedFile.size / 1024 / 1024).toFixed(2) + ' MB'
+                size: formatFileSize(selectedFile.size)
             });
             setTotalPages(pages);
             setStartPage(1);
@@ -90,16 +91,7 @@ export default function SplitPdfPage() {
             }
 
             const newPdfBytes = await newPdf.save();
-            const blob = new Blob([newPdfBytes], { type: 'application/pdf' });
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `split_${startPage}-${endPage}_${file.name}`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            downloadPdfBytes(newPdfBytes, `${stripExtension(file.name)}_pages_${startPage}-${endPage}.pdf`);
 
             const user = auth?.currentUser;
             if (user) {
@@ -157,7 +149,7 @@ export default function SplitPdfPage() {
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept="application/pdf"
+                        accept="application/pdf,.pdf"
                         style={{ display: 'none' }}
                         onChange={(e) => {
                             if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);

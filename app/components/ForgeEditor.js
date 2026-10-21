@@ -19,15 +19,22 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { Document, Page, pdfjs } from 'react-pdf';
+import { Document, Page } from 'react-pdf';
+import '../utils/pdfWorker';
 import { convertPdfToImage } from '../utils/pdfToImage';
 import { removeWhiteBackground } from '../utils/imageProcessing';
 import { generatePdf } from '../utils/pdfGenerator';
 import { extractFormFieldsFromPdfBytes, getInitialsFromName } from '../utils/pdfForms';
-
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+import { downloadBlob, downloadPdfBytes, stripExtension } from '../utils/files';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+const HISTORY_LIMIT = 60;
+const COALESCE_MS = 1000;
+
+function isEditableTarget(target) {
+  const tag = target?.tagName?.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(target?.isContentEditable);
+}
 
 const makeId = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -172,17 +179,16 @@ export default function ForgeEditor({
   onBackToDashboard,
   onSignOut,
 }) {
-  const [pdfFile, setPdfFile] = useState(initialPdfFile || null);
+  const pdfFile = initialPdfFile || null;
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(initialDraft?.currentPage || 1);
-  const [elements, setElements] = useState(() => hydrateElements(initialDraft?.elements || []));
+  const [elements, setElementsState] = useState(() => hydrateElements(initialDraft?.elements || []));
   const [selectedId, setSelectedId] = useState(null);
   const [hoverId, setHoverId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [zoom, setZoom] = useState(initialDraft?.zoom || 1);
   const [busy, setBusy] = useState(false);
-  const [history, setHistory] = useState([]);
-  const [future, setFuture] = useState([]);
+  const [historyFlags, setHistoryFlags] = useState({ canUndo: false, canRedo: false });
   const [renderSize, setRenderSize] = useState({ width: 680, height: 900 });
   const [containerWidth, setContainerWidth] = useState(980);
   const [saveStatus, setSaveStatus] = useState('saved');
@@ -205,11 +211,40 @@ export default function ForgeEditor({
   const interactionRef = useRef(null);
   const initializedRef = useRef(false);
   const saveTimerRef = useRef(null);
-  const lastSavedPayloadRef = useRef(JSON.stringify(initialDraft || {}));
+  const lastSavedPayloadRef = useRef(null);
+  const resetBaselineRef = useRef(false);
+  const saveQueueRef = useRef(Promise.resolve());
+  const saveStatusRef = useRef('saved');
+  const elementsRef = useRef(elements);
+  // Snapshots are the previous immutable arrays themselves; every edit produces new objects,
+  // so there is no need to deep-clone (which also copied File blobs on every keystroke).
+  const historyRef = useRef({ past: [], future: [], lastKey: null, lastAt: 0 });
+
+  const setElements = useCallback((next) => {
+    elementsRef.current = next;
+    setElementsState(next);
+  }, []);
+
+  const syncHistoryFlags = useCallback(() => {
+    const { past, future } = historyRef.current;
+    setHistoryFlags({ canUndo: past.length > 0, canRedo: future.length > 0 });
+  }, []);
+
+  const pushHistory = useCallback((snapshot, coalesceKey = null) => {
+    const state = historyRef.current;
+    const now = Date.now();
+    const coalesce = coalesceKey && state.lastKey === coalesceKey && now - state.lastAt < COALESCE_MS;
+    state.lastKey = coalesceKey;
+    state.lastAt = now;
+    if (coalesce) return;
+    state.past = [...state.past.slice(-(HISTORY_LIMIT - 1)), snapshot];
+    state.future = [];
+    syncHistoryFlags();
+  }, [syncHistoryFlags]);
 
   useEffect(() => {
-    setPdfFile(initialPdfFile || null);
-  }, [initialPdfFile]);
+    saveStatusRef.current = saveStatus;
+  }, [saveStatus]);
 
   useEffect(() => {
     setQuickFill((prev) => ({
@@ -234,10 +269,6 @@ export default function ForgeEditor({
   );
 
   useEffect(() => {
-    setFormValues(initialDraft?.formValues || {});
-  }, [initialDraft]);
-
-  useEffect(() => {
     let active = true;
 
     const loadFormFields = async () => {
@@ -253,6 +284,8 @@ export default function ForgeEditor({
         if (!active) return;
 
         setFormFields(detected);
+        // The PDF's own default values are not a user edit; don't autosave because of them.
+        resetBaselineRef.current = true;
         setFormValues((prev) => {
           const next = { ...prev };
           for (const field of detected) {
@@ -275,35 +308,51 @@ export default function ForgeEditor({
     };
   }, [pdfFile]);
 
-  const trackHistory = useCallback((snapshot) => {
-    setHistory((prev) => [...prev.slice(-59), snapshot]);
-    setFuture([]);
-  }, []);
-
   const applyChange = useCallback(
-    (updater, options = { track: true }) => {
-      setElements((prev) => {
-        const next = updater(prev);
-        if (next === prev) return prev;
-        if (options.track) {
-          trackHistory(structuredClone(prev));
-        }
-        return next;
-      });
+    (updater, { track = true, coalesceKey = null } = {}) => {
+      const prev = elementsRef.current;
+      const next = updater(prev);
+      if (next === prev) return;
+      if (track) pushHistory(prev, coalesceKey);
+      setElements(next);
     },
-    [trackHistory],
+    [pushHistory, setElements],
   );
+
+  const undo = useCallback(() => {
+    const state = historyRef.current;
+    if (!state.past.length) return;
+    state.future = [...state.future, elementsRef.current];
+    setElements(state.past[state.past.length - 1]);
+    state.past = state.past.slice(0, -1);
+    state.lastKey = null;
+    syncHistoryFlags();
+    setSelectedId(null);
+    setEditingId(null);
+  }, [setElements, syncHistoryFlags]);
+
+  const redo = useCallback(() => {
+    const state = historyRef.current;
+    if (!state.future.length) return;
+    state.past = [...state.past, elementsRef.current];
+    setElements(state.future[state.future.length - 1]);
+    state.future = state.future.slice(0, -1);
+    state.lastKey = null;
+    syncHistoryFlags();
+    setSelectedId(null);
+    setEditingId(null);
+  }, [setElements, syncHistoryFlags]);
 
   useEffect(() => {
     return () => {
-      elements.forEach((item) => {
+      // Read the ref so URLs created after mount are released too (undo can resurrect items,
+      // so only revoke on unmount).
+      elementsRef.current.forEach((item) => {
         if (item.type === 'image' && item.objectUrl) {
           URL.revokeObjectURL(item.objectUrl);
         }
       });
     };
-    // Only revoke on unmount - objectUrls are nullified on save/serialize
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -326,8 +375,17 @@ export default function ForgeEditor({
       const dx = (event.clientX - interaction.startClient.x) / rect.width;
       const dy = (event.clientY - interaction.startClient.y) / rect.height;
 
-      setElements((prev) =>
-        prev.map((item) => {
+      // Record undo history on the first real movement, not on every click-to-select.
+      if (!interaction.moved) {
+        if (Math.abs(event.clientX - interaction.startClient.x) < 2 && Math.abs(event.clientY - interaction.startClient.y) < 2) {
+          return;
+        }
+        interaction.moved = true;
+        pushHistory(elementsRef.current);
+      }
+
+      setElements(
+        elementsRef.current.map((item) => {
           if (item.id !== interaction.id) return item;
 
           if (interaction.mode === 'drag') {
@@ -378,39 +436,27 @@ export default function ForgeEditor({
       interactionRef.current = null;
     };
 
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    // Pointer events cover mouse, touch and pen.
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
 
     return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
-  }, []);
+  }, [pushHistory, setElements]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
-      const tag = event.target?.tagName?.toLowerCase();
-      if (tag === 'input' || tag === 'textarea') return;
+      if (isEditableTarget(event.target)) return;
 
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+      const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && (key === 'z' || key === 'y')) {
         event.preventDefault();
-        if (event.shiftKey) {
-          if (!future.length) return;
-          setFuture((prevFuture) => {
-            const next = structuredClone(prevFuture[prevFuture.length - 1]);
-            setHistory((prevHistory) => [...prevHistory, structuredClone(elements)]);
-            setElements(next);
-            return prevFuture.slice(0, -1);
-          });
-        } else {
-          if (!history.length) return;
-          setHistory((prevHistory) => {
-            const previous = structuredClone(prevHistory[prevHistory.length - 1]);
-            setFuture((prevFuture) => [...prevFuture, structuredClone(elements)]);
-            setElements(previous);
-            return prevHistory.slice(0, -1);
-          });
-        }
+        if (key === 'y' || event.shiftKey) redo();
+        else undo();
         return;
       }
 
@@ -437,54 +483,79 @@ export default function ForgeEditor({
               y: clamp(item.y + dy, 0, 1 - item.height),
             };
           }),
+          { coalesceKey: `nudge:${selectedId}` },
         );
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [applyChange, elements, future, history, selectedId]);
+  }, [applyChange, redo, selectedId, undo]);
 
-  const saveDraftNow = useCallback(async () => {
-    if (!onSaveDraft || !pdfFile) return;
-
-    const snapshot = {
+  const buildSnapshot = useCallback(
+    () => ({
       currentPage,
       zoom,
       elements: serializeElements(elements),
       formValues,
-    };
+    }),
+    [currentPage, elements, formValues, zoom],
+  );
+
+  const saveDraftNow = useCallback(() => {
+    if (!onSaveDraft || !pdfFile) return Promise.resolve();
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+    const snapshot = buildSnapshot();
     const payload = JSON.stringify(snapshot);
 
-    if (payload === lastSavedPayloadRef.current) {
-      setSaveStatus('saved');
-      return;
-    }
+    // Serialize saves so an older snapshot can never land after a newer one.
+    saveQueueRef.current = saveQueueRef.current.then(async () => {
+      if (payload === lastSavedPayloadRef.current) {
+        setSaveStatus('saved');
+        return;
+      }
 
-    setSaveStatus('saving');
-    setSaveError('');
+      setSaveStatus('saving');
+      setSaveError('');
 
-    try {
-      await onSaveDraft(snapshot);
-      lastSavedPayloadRef.current = payload;
-      setSaveStatus('saved');
-    } catch (error) {
-      setSaveStatus('error');
-      setSaveError(error.message || 'Failed to save draft.');
-    }
-  }, [currentPage, elements, formValues, onSaveDraft, pdfFile, zoom]);
+      try {
+        await onSaveDraft(snapshot);
+        lastSavedPayloadRef.current = payload;
+        setSaveStatus('saved');
+      } catch (error) {
+        setSaveStatus('error');
+        setSaveError(error.message || 'Failed to save draft.');
+      }
+    });
+    return saveQueueRef.current;
+  }, [buildSnapshot, onSaveDraft, pdfFile]);
+
+  const saveDraftNowRef = useRef(saveDraftNow);
+  useEffect(() => {
+    saveDraftNowRef.current = saveDraftNow;
+  }, [saveDraftNow]);
 
   useEffect(() => {
+    const payload = JSON.stringify(buildSnapshot());
     if (!initializedRef.current) {
       initializedRef.current = true;
-      return;
+      lastSavedPayloadRef.current = payload;
+      return undefined;
     }
+    if (resetBaselineRef.current) {
+      resetBaselineRef.current = false;
+      if (saveStatusRef.current === 'saved') {
+        lastSavedPayloadRef.current = payload;
+        return undefined;
+      }
+    }
+    if (payload === lastSavedPayloadRef.current) {
+      setSaveStatus('saved');
+      return undefined;
+    }
+
     setSaveStatus('dirty');
-
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-    }
-
     saveTimerRef.current = setTimeout(() => {
       saveDraftNow();
     }, 1800);
@@ -492,36 +563,58 @@ export default function ForgeEditor({
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [elements, currentPage, zoom, formValues, saveDraftNow]);
+  }, [buildSnapshot, saveDraftNow]);
 
   useEffect(() => {
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        saveDraftNow();
+        saveDraftNowRef.current();
       }
     };
+    const onBeforeUnload = (event) => {
+      if (saveStatusRef.current === 'saved') return;
+      saveDraftNowRef.current();
+      event.preventDefault();
+      event.returnValue = '';
+    };
 
-    window.addEventListener('visibilitychange', onVisibility);
-    return () => window.removeEventListener('visibilitychange', onVisibility);
-  }, [saveDraftNow]);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      // Flush pending edits when navigating away inside the app (the debounce would drop them).
+      if (saveStatusRef.current === 'dirty') saveDraftNowRef.current();
+    };
+  }, []);
+
+  const leaveAfterSave = (callback) => async () => {
+    await saveDraftNow();
+    callback?.();
+  };
 
   const startInteraction = (event, id, mode, handle = null) => {
     if (!canvasRef.current) return;
+    // Let clicks inside the inline editor place the caret instead of starting a drag.
+    if (event.target.closest?.('textarea')) {
+      event.stopPropagation();
+      return;
+    }
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
 
     event.preventDefault();
     event.stopPropagation();
     setSelectedId(id);
     setEditingId(null);
 
-    const target = elements.find((item) => item.id === id);
+    const target = elementsRef.current.find((item) => item.id === id);
     if (!target) return;
-
-    trackHistory(structuredClone(elements));
 
     interactionRef.current = {
       id,
       mode,
       handle,
+      moved: false,
       startClient: { x: event.clientX, y: event.clientY },
       startBox: {
         x: target.x,
@@ -534,7 +627,12 @@ export default function ForgeEditor({
 
   const updateSelected = (updates) => {
     if (!selectedId) return;
-    applyChange((prev) => prev.map((item) => (item.id === selectedId ? { ...item, ...updates } : item)));
+    // Typing or dragging a slider produces one undo step per burst, not per keystroke.
+    const coalesceKey = `${selectedId}:${Object.keys(updates).sort().join(',')}`;
+    applyChange(
+      (prev) => prev.map((item) => (item.id === selectedId ? { ...item, ...updates } : item)),
+      { coalesceKey },
+    );
   };
 
   const updateFormValue = (name, value) => {
@@ -626,26 +724,6 @@ export default function ForgeEditor({
     setEditingId(null);
   };
 
-  const undo = () => {
-    if (!history.length) return;
-    const previous = structuredClone(history[history.length - 1]);
-    setHistory((prev) => prev.slice(0, -1));
-    setFuture((prev) => [...prev, structuredClone(elements)]);
-    setElements(previous);
-    setSelectedId(null);
-    setEditingId(null);
-  };
-
-  const redo = () => {
-    if (!future.length) return;
-    const next = structuredClone(future[future.length - 1]);
-    setFuture((prev) => prev.slice(0, -1));
-    setHistory((prev) => [...prev, structuredClone(elements)]);
-    setElements(next);
-    setSelectedId(null);
-    setEditingId(null);
-  };
-
   const addText = () => {
     const item = createTextElement(currentPage - 1);
     applyChange((prev) => [...prev, item]);
@@ -729,42 +807,50 @@ export default function ForgeEditor({
     });
   };
 
-  const exportPdf = async () => {
+  const baseName = stripExtension(documentTitle);
+
+  const renderEditedPdf = async () => {
+    const warnings = new Set();
+    const pdfBytes = await pdfFile.arrayBuffer();
+    const modified = await generatePdf({
+      pdfBytes,
+      elements,
+      formValues,
+      onWarning: (message) => warnings.add(message),
+    });
+    setSaveError(warnings.size ? [...warnings].join(' ') : '');
+    return modified;
+  };
+
+  const runExport = async (task) => {
     if (!pdfFile) return;
     setBusy(true);
     try {
-      const pdfBytes = await pdfFile.arrayBuffer();
-      const modified = await generatePdf({ pdfBytes, elements, formValues });
-      const blob = new Blob([modified], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${documentTitle?.replace(/\.pdf$/i, '') || 'document'}-edited.pdf`;
-      link.click();
-      URL.revokeObjectURL(url);
+      await task();
+    } catch (error) {
+      console.error('Export failed:', error);
+      setSaveError(`Export failed: ${error.message || 'unknown error'}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const exportImage = async (format) => {
-    if (!pdfFile) return;
-    setBusy(true);
-    try {
-      const pdfBytes = await pdfFile.arrayBuffer();
-      const modified = await generatePdf({ pdfBytes, elements, formValues });
-      const dataUrl = await convertPdfToImage(modified, currentPage, format);
-      const link = document.createElement('a');
-      link.href = dataUrl;
-      link.download = `${documentTitle?.replace(/\.pdf$/i, '') || 'document'}-page-${currentPage}.${format === 'jpeg' ? 'jpg' : format}`;
-      link.click();
-    } finally {
-      setBusy(false);
-    }
-  };
+  const exportPdf = () =>
+    runExport(async () => {
+      downloadPdfBytes(await renderEditedPdf(), `${baseName}-edited.pdf`);
+    });
+
+  const exportImage = (format) =>
+    runExport(async () => {
+      const image = await convertPdfToImage(await renderEditedPdf(), currentPage, format);
+      downloadBlob(image, `${baseName}-page-${currentPage}.${format === 'jpeg' ? 'jpg' : format}`);
+    });
 
   const hasElements = elements.length > 0;
-  const targetWidth = Math.max(320, Math.min(980, Math.floor((containerWidth - 24) * zoom)));
+  // Fit the page to the available width (minus .canvas-scroll padding), then apply zoom.
+  // Clamping after zooming made zoom-in a no-op on wide screens.
+  const fitWidth = clamp(containerWidth - 32, 280, 980);
+  const targetWidth = Math.floor(fitWidth * zoom);
 
   return (
     <main className="app-shell">
@@ -780,17 +866,17 @@ export default function ForgeEditor({
           {saveError ? <p className="error-text">{saveError}</p> : null}
         </div>
         <div className="stack">
-          <button className="ghost-btn" onClick={onBackToDashboard}>Back to Dashboard</button>
+          <button className="ghost-btn" onClick={leaveAfterSave(onBackToDashboard)}>Back to Dashboard</button>
           <button className="ghost-btn" onClick={saveDraftNow}>
             <Save size={16} /> Save Now
           </button>
-          <button className="ghost-btn" onClick={onSignOut}>
+          <button className="ghost-btn" onClick={leaveAfterSave(onSignOut)}>
             <LogOut size={16} /> Sign Out
           </button>
         </div>
       </section>
 
-      <section className="workspace" onMouseDown={() => setSelectedId(null)}>
+      <section className="workspace" onPointerDown={() => setSelectedId(null)}>
         <div className="topbar">
           <div className="file-info">
             <h3>{documentTitle}</h3>
@@ -800,10 +886,10 @@ export default function ForgeEditor({
           </div>
 
           <div className="topbar-actions">
-            <button className="ghost-btn" onClick={undo} disabled={!history.length}>
+            <button className="ghost-btn" onClick={undo} disabled={!historyFlags.canUndo}>
               <Undo2 size={16} /> Undo
             </button>
-            <button className="ghost-btn" onClick={redo} disabled={!future.length}>
+            <button className="ghost-btn" onClick={redo} disabled={!historyFlags.canRedo}>
               <RotateCw size={16} /> Redo
             </button>
             <button className="ghost-btn" onClick={() => setZoom(1)}>
@@ -864,6 +950,7 @@ export default function ForgeEditor({
                 min={1}
                 max={Math.max(1, numPages)}
                 value={currentPage}
+                disabled={numPages <= 1}
                 onChange={(event) => setCurrentPage(Number(event.target.value))}
               />
             </div>
@@ -972,7 +1059,7 @@ export default function ForgeEditor({
                         style={style}
                         onMouseEnter={() => setHoverId(item.id)}
                         onMouseLeave={() => setHoverId((prev) => (prev === item.id ? null : prev))}
-                        onMouseDown={(event) => startInteraction(event, item.id, 'drag')}
+                        onPointerDown={(event) => startInteraction(event, item.id, 'drag')}
                         onDoubleClick={() => {
                           if (item.type === 'text') {
                             setSelectedId(item.id);
@@ -1008,10 +1095,10 @@ export default function ForgeEditor({
 
                         {selectedId === item.id || (item.type === 'image' && hoverId === item.id) ? (
                           <>
-                            <button className="resize-handle nw" onMouseDown={(event) => startInteraction(event, item.id, 'resize', 'nw')} />
-                            <button className="resize-handle ne" onMouseDown={(event) => startInteraction(event, item.id, 'resize', 'ne')} />
-                            <button className="resize-handle sw" onMouseDown={(event) => startInteraction(event, item.id, 'resize', 'sw')} />
-                            <button className="resize-handle se" onMouseDown={(event) => startInteraction(event, item.id, 'resize', 'se')} />
+                            <button className="resize-handle nw" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'nw')} aria-label="Resize" />
+                            <button className="resize-handle ne" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'ne')} aria-label="Resize" />
+                            <button className="resize-handle sw" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'sw')} aria-label="Resize" />
+                            <button className="resize-handle se" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'se')} aria-label="Resize" />
                           </>
                         ) : null}
                       </div>
@@ -1022,7 +1109,7 @@ export default function ForgeEditor({
             </div>
           </div>
 
-          <aside className="right-panel" onMouseDown={(event) => event.stopPropagation()}>
+          <aside className="right-panel" onPointerDown={(event) => event.stopPropagation()}>
             <div className="panel-section">
               <h4>Selection</h4>
               {!selectedElement ? (

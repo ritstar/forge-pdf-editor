@@ -8,9 +8,10 @@ import { auth } from '@/lib/firebase/config';
 import ForgeLogo from './components/ForgeLogo';
 import LandingFooter from './components/LandingFooter';
 import { TOOLS } from '@/lib/toolsData';
+import { useTheme } from './utils/useTheme';
 
 export default function LandingPage() {
-  const [theme, setTheme] = useState('light');
+  const [theme, toggleTheme] = useTheme();
   const [user, setUser] = useState(null);
   const [authChecking, setAuthChecking] = useState(() => Boolean(auth));
   const availableTools = TOOLS;
@@ -36,22 +37,6 @@ export default function LandingPage() {
     };
   }, []);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const storedTheme = window.localStorage.getItem('forge-theme');
-      const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-      const initialTheme = storedTheme || (prefersDark ? 'dark' : 'light');
-      setTheme(initialTheme);
-    }, 0);
-
-    return () => clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    window.localStorage.setItem('forge-theme', theme);
-  }, [theme]);
-
   return (
     <main className="landing-page">
       <header className="landing-nav">
@@ -60,7 +45,7 @@ export default function LandingPage() {
           <button
             type="button"
             className="ghost-btn theme-toggle"
-            onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+            onClick={toggleTheme}
             aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}

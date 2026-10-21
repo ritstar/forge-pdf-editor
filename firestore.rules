@@ -2,39 +2,50 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Owner of an existing record.
+    function ownsExisting() {
+      return signedIn() && resource.data.user_id == request.auth.uid;
+    }
+
+    // New or updated record must stay owned by the caller (no creating rows for other users,
+    // no transferring ownership on update).
+    function ownsIncoming() {
+      return signedIn() && request.resource.data.user_id == request.auth.uid;
+    }
+
     // Profiles: users can only read/write their own profile
     match /profiles/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if signedIn() && request.auth.uid == userId;
     }
 
     // Documents: users can only access their own documents
     match /documents/{docId} {
-      allow read, write: if request.auth != null
-        && (resource == null || resource.data.user_id == request.auth.uid);
-      allow create: if request.auth != null
-        && request.resource.data.user_id == request.auth.uid;
+      allow read, delete: if ownsExisting();
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && ownsIncoming();
 
-      // Drafts subcollection
+      // Drafts subcollection: access follows the parent document's owner.
       match /drafts/{draftId} {
-        allow read, write: if request.auth != null
+        allow read, write: if signedIn()
           && get(/databases/$(database)/documents/documents/$(docId)).data.user_id == request.auth.uid;
       }
     }
 
     // Signatures: users can only access their own
     match /signatures/{sigId} {
-      allow read, write: if request.auth != null
-        && (resource == null || resource.data.user_id == request.auth.uid);
-      allow create: if request.auth != null
-        && request.resource.data.user_id == request.auth.uid;
+      allow read, delete: if ownsExisting();
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && ownsIncoming();
     }
 
-    // Tool history: users can only access their own
+    // Tool history: append-only log owned by the user
     match /tool_history/{historyId} {
-      allow read, write: if request.auth != null
-        && (resource == null || resource.data.user_id == request.auth.uid);
-      allow create: if request.auth != null
-        && request.resource.data.user_id == request.auth.uid;
+      allow read, delete: if ownsExisting();
+      allow create: if ownsIncoming();
     }
   }
 }

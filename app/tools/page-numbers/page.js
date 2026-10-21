@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { getPageFrame, placeAt } from '@/app/utils/pdfCoords';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
+import { downloadPdfBytes, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
 import { FilePlus2, FileText, Trash2, Hash, Settings } from 'lucide-react';
 
 export default function PageNumbersPage() {
@@ -18,7 +20,7 @@ export default function PageNumbersPage() {
 
     const handleFile = async (selectedFile) => {
         setError('');
-        if (selectedFile.type !== 'application/pdf') {
+        if (!isPdfFile(selectedFile)) {
             setError('Please select a valid PDF file.');
             return;
         }
@@ -31,7 +33,7 @@ export default function PageNumbersPage() {
             setFile({
                 obj: selectedFile,
                 name: selectedFile.name,
-                size: (selectedFile.size / 1024 / 1024).toFixed(2) + ' MB'
+                size: formatFileSize(selectedFile.size)
             });
             setTotalPages(pages);
         } catch (err) {
@@ -68,26 +70,27 @@ export default function PageNumbersPage() {
             const pages = pdfDoc.getPages();
 
             pages.forEach((page, index) => {
-                const { width, height } = page.getSize();
+                // Work in the page's visible frame so numbers land correctly on rotated or
+                // cropped pages (e.g. scanned landscape pages stored with /Rotate 90).
+                const frame = getPageFrame(page);
                 const pageNum = index + 1;
-                
+
                 let text = `${pageNum}`;
                 if (format === 'Page 1') text = `Page ${pageNum}`;
                 if (format === '1 of 10') text = `${pageNum} of ${pages.length}`;
 
-                const fontSize = 12;
+                const fontSize = Math.max(8, Math.min(12, frame.width / 50));
+                const margin = Math.min(30, frame.height * 0.05);
                 const textWidth = helveticaFont.widthOfTextAtSize(text, fontSize);
-                
-                let x = width / 2 - textWidth / 2;
-                let y = 30; // default bottom
 
-                if (position.includes('left')) x = 30;
-                if (position.includes('right')) x = width - textWidth - 30;
-                if (position.includes('top')) y = height - 30 - fontSize;
+                let u = frame.width / 2 - textWidth / 2;
+                if (position.includes('left')) u = margin;
+                if (position.includes('right')) u = frame.width - textWidth - margin;
+                // v is the baseline measured from the top of the visible page.
+                const v = position.includes('top') ? margin + fontSize : frame.height - margin;
 
                 page.drawText(text, {
-                    x,
-                    y,
+                    ...placeAt(frame, u, v),
                     size: fontSize,
                     font: helveticaFont,
                     color: rgb(0, 0, 0),
@@ -95,16 +98,7 @@ export default function PageNumbersPage() {
             });
 
             const pdfBytes = await pdfDoc.save();
-            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `numbered_${file.name}`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            downloadPdfBytes(pdfBytes, `${stripExtension(file.name)}_numbered.pdf`);
 
             const user = auth?.currentUser;
             if (user) {
@@ -162,7 +156,7 @@ export default function PageNumbersPage() {
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept="application/pdf"
+                        accept="application/pdf,.pdf"
                         style={{ display: 'none' }}
                         onChange={(e) => {
                             if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);

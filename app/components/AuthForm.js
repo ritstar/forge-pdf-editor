@@ -145,7 +145,7 @@ export default function AuthForm({ mode, nextPath = '/app' }) {
         await ensureProfile(user);
         await createSessionCookie(user);
         setMessage('Account created successfully.');
-        router.push('/app');
+        router.push(next);
         router.refresh();
         return;
       }
@@ -223,7 +223,7 @@ export default function AuthForm({ mode, nextPath = '/app' }) {
 
         <p className="muted auth-switch">
           {isSignup ? 'Already have an account?' : "Don't have an account?"}{' '}
-          <Link href={isSignup ? '/login' : '/signup'}>{isSignup ? 'Login' : 'Create one'}</Link>
+          <Link href={`${isSignup ? '/login' : '/signup'}${next !== '/app' ? `?next=${encodeURIComponent(next)}` : ''}`}>{isSignup ? 'Login' : 'Create one'}</Link>
         </p>
       </section>
     </main>

@@ -2,14 +2,15 @@
 
 import { useState, useRef } from 'react';
 import { PDFDocument, degrees } from 'pdf-lib';
-import { Document, Page, pdfjs } from 'react-pdf';
+import { Document, Page } from 'react-pdf';
+import '@/app/utils/pdfWorker';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
+import { downloadPdfBytes, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
 import { FilePlus2, RotateCw, RefreshCw, X } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 export default function RotateClient() {
     const [file, setFile] = useState(null);
@@ -22,7 +23,7 @@ export default function RotateClient() {
 
     const handleFile = (selectedFile) => {
         setError('');
-        if (selectedFile.type !== 'application/pdf') {
+        if (!isPdfFile(selectedFile)) {
             setError('Please select a valid PDF file.');
             return;
         }
@@ -94,21 +95,12 @@ export default function RotateClient() {
                 const customRotation = pageRotations[i] || 0;
                 if (customRotation > 0) {
                     const currentRotation = page.getRotation().angle;
-                    page.setRotation(degrees(currentRotation + customRotation));
+                    page.setRotation(degrees((((currentRotation + customRotation) % 360) + 360) % 360));
                 }
             });
 
             const newPdfBytes = await pdf.save();
-            const blob = new Blob([newPdfBytes], { type: 'application/pdf' });
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `rotated_${file.name}`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            downloadPdfBytes(newPdfBytes, `rotated_${file.name}`);
 
             const user = auth.currentUser;
             if (user) {
@@ -168,7 +160,7 @@ export default function RotateClient() {
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept="application/pdf"
+                        accept="application/pdf,.pdf"
                         style={{ display: 'none' }}
                         onChange={(e) => {
                             if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);

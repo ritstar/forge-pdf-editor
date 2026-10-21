@@ -2,8 +2,11 @@
 
 import { useState, useRef } from 'react';
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
+import { makeTextEncoder } from '@/app/utils/pdfGenerator';
+import { getPageFrame, visualToPdf } from '@/app/utils/pdfCoords';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
+import { downloadPdfBytes, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
 import { FilePlus2, FileText, Trash2, Stamp, Settings } from 'lucide-react';
 
 export default function WatermarkPage() {
@@ -18,7 +21,7 @@ export default function WatermarkPage() {
 
     const handleFile = async (selectedFile) => {
         setError('');
-        if (selectedFile.type !== 'application/pdf') {
+        if (!isPdfFile(selectedFile)) {
             setError('Please select a valid PDF file.');
             return;
         }
@@ -31,7 +34,7 @@ export default function WatermarkPage() {
             setFile({
                 obj: selectedFile,
                 name: selectedFile.name,
-                size: (selectedFile.size / 1024 / 1024).toFixed(2) + ' MB'
+                size: formatFileSize(selectedFile.size)
             });
             setTotalPages(pages);
         } catch (err) {
@@ -67,34 +70,37 @@ export default function WatermarkPage() {
             
             const pages = pdfDoc.getPages();
 
+            // Helvetica only covers WinAnsi; unsupported characters would abort the export.
+            const text = makeTextEncoder(helveticaFont)(watermarkText.trim());
+            const widthAtOne = helveticaFont.widthOfTextAtSize(text, 1);
+
             pages.forEach((page) => {
-                const { width, height } = page.getSize();
-                const fontSize = 60;
-                const textWidth = helveticaFont.widthOfTextAtSize(watermarkText, fontSize);
-                
-                // Draw diagonal watermark in the center
-                page.drawText(watermarkText, {
-                    x: width / 2 - (textWidth / 2 * 0.707) + (fontSize/2 * 0.707),
-                    y: height / 2 - (textWidth / 2 * 0.707) - (fontSize/2 * 0.707),
+                const frame = getPageFrame(page);
+                // Scale the text to fit along the visible diagonal, whatever the page size.
+                const diagonal = Math.hypot(frame.width, frame.height);
+                const fontSize = Math.max(10, Math.min(72, (diagonal * 0.7) / widthAtOne));
+                const textWidth = widthAtOne * fontSize;
+                const capHeight = helveticaFont.heightAtSize(fontSize, { descender: false });
+
+                // Read bottom-left to top-right as displayed; add /Rotate so rotated pages match.
+                const angle = (Math.atan2(frame.height, frame.width) * 180) / Math.PI + frame.rotation;
+                const rad = (angle * Math.PI) / 180;
+                const center = visualToPdf(frame, frame.width / 2, frame.height / 2);
+
+                page.drawText(text, {
+                    // Shift from the center by half the rotated text box.
+                    x: center.x - (textWidth / 2) * Math.cos(rad) + (capHeight / 2) * Math.sin(rad),
+                    y: center.y - (textWidth / 2) * Math.sin(rad) - (capHeight / 2) * Math.cos(rad),
                     size: fontSize,
                     font: helveticaFont,
                     color: rgb(0.5, 0.5, 0.5),
                     opacity: Number(opacity),
-                    rotate: degrees(45),
+                    rotate: degrees(angle),
                 });
             });
 
             const pdfBytes = await pdfDoc.save();
-            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `watermarked_${file.name}`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            downloadPdfBytes(pdfBytes, `${stripExtension(file.name)}_watermarked.pdf`);
 
             const user = auth?.currentUser;
             if (user) {
@@ -152,7 +158,7 @@ export default function WatermarkPage() {
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept="application/pdf"
+                        accept="application/pdf,.pdf"
                         style={{ display: 'none' }}
                         onChange={(e) => {
                             if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);

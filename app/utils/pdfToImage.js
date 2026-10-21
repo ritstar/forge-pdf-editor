@@ -1,42 +1,48 @@
 'use client';
 
+import { pdfjs } from './pdfWorker';
+
+export function canvasToBlob(canvas, mimeType, quality) {
+    return new Promise((resolve, reject) => {
+        canvas.toBlob(
+            (blob) => (blob ? resolve(blob) : reject(new Error('Failed to encode image'))),
+            mimeType,
+            quality,
+        );
+    });
+}
+
+// Renders one page and returns an image Blob. Uses toBlob rather than toDataURL, which is
+// synchronous, blocks the main thread and inflates memory by ~33% with base64.
+export async function renderPdfPageToBlob(pdf, pageNum, { scale = 2, format = 'png', quality = 0.92 } = {}) {
+    const page = await pdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    const context = canvas.getContext('2d');
+
+    const isJpeg = format === 'jpeg' || format === 'jpg';
+    if (isJpeg) {
+        // JPEG has no alpha; without a fill, transparent areas turn black.
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    await page.render({ canvasContext: context, viewport }).promise;
+    page.cleanup();
+
+    const blob = await canvasToBlob(canvas, isJpeg ? 'image/jpeg' : 'image/png', quality);
+    canvas.width = 0;
+    canvas.height = 0;
+    return blob;
+}
+
 export async function convertPdfToImage(pdfBytes, pageNum = 1, format = 'png') {
+    const pdf = await pdfjs.getDocument({ data: pdfBytes }).promise;
     try {
-        // Dynamically import pdfjs-dist to avoid SSR issues with DOMMatrix
-        const pdfjsLib = await import('pdfjs-dist');
-
-        // Configure worker
-        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-            pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
-        }
-
-        // Load the PDF document
-        const loadingTask = pdfjsLib.getDocument({ data: pdfBytes });
-        const pdf = await loadingTask.promise;
-
-        // Get the page (pdfjs pages are 1-indexed)
-        const page = await pdf.getPage(pageNum);
-
-        // Set scale for better quality (2x for high DPI)
-        const viewport = page.getViewport({ scale: 2 });
-
-        // Create canvas
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-
-        // Render page to canvas
-        await page.render({
-            canvasContext: context,
-            viewport: viewport
-        }).promise;
-
-        // Convert to data URL
-        const mimeType = format === 'jpeg' || format === 'jpg' ? 'image/jpeg' : 'image/png';
-        return canvas.toDataURL(mimeType, 0.95);
-    } catch (error) {
-        console.error('Error converting PDF to image:', error);
-        throw error;
+        return await renderPdfPageToBlob(pdf, pageNum, { format, quality: 0.95 });
+    } finally {
+        pdf.destroy();
     }
 }

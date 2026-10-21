@@ -5,20 +5,21 @@ import { FileText, Settings, UploadCloud } from 'lucide-react';
 import { TOOLS } from '@/lib/toolsData';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
+import { downloadBlob, formatFileSize, stripExtension } from '@/app/utils/files';
 
 const TOOL_ACCEPT = {
-  'compress-pdf': 'application/pdf',
-  'pdf-to-word': 'application/pdf',
-  'pdf-to-powerpoint': 'application/pdf',
-  'pdf-to-excel': 'application/pdf',
+  'compress-pdf': 'application/pdf,.pdf',
+  'pdf-to-word': 'application/pdf,.pdf',
+  'pdf-to-powerpoint': 'application/pdf,.pdf',
+  'pdf-to-excel': 'application/pdf,.pdf',
   'word-to-pdf': '.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'powerpoint-to-pdf': '.ppt,.pptx,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'excel-to-pdf': '.xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv',
   'html-to-pdf': '.html,.htm,text/html',
-  'unlock-pdf': 'application/pdf',
-  'protect-pdf': 'application/pdf',
-  'pdf-to-pdfa': 'application/pdf',
-  'repair-pdf': 'application/pdf',
+  'unlock-pdf': 'application/pdf,.pdf',
+  'protect-pdf': 'application/pdf,.pdf',
+  'pdf-to-pdfa': 'application/pdf,.pdf',
+  'repair-pdf': 'application/pdf,.pdf',
 };
 
 const TOOL_OUTPUT_TEXT = {
@@ -36,6 +37,45 @@ const TOOL_OUTPUT_TEXT = {
   'repair-pdf': 'Repaired PDF',
 };
 
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+const PDF_INPUT_TOOLS = new Set(['compress-pdf', 'pdf-to-word', 'pdf-to-powerpoint', 'pdf-to-excel', 'unlock-pdf', 'protect-pdf', 'pdf-to-pdfa', 'repair-pdf']);
+
+const STATUS_MESSAGES = {
+  401: 'Your session has expired. Please sign in again.',
+  413: 'This file is too large to process. Try a file under 50 MB.',
+  429: 'Too many requests. Please wait a minute and try again.',
+  502: 'The conversion service is unavailable. It may be starting up; try again in a moment.',
+  504: 'The conversion took too long. Try a smaller file.',
+};
+
+// Prefer uploading straight to the backend with a short-lived token (no serverless body
+// limit, one less hop). Falls back to the same-origin proxy if the backend is unreachable
+// from the browser (CORS/network) or does not accept tokens yet.
+async function submitToolRequest(toolId, form) {
+  try {
+    const tokenRes = await fetch(`/api/pdf-tools/${toolId}`, { cache: 'no-store' });
+    if (tokenRes.status === 401) {
+      return tokenRes;
+    }
+    if (tokenRes.ok) {
+      const { endpoint, token } = await tokenRes.json();
+      const direct = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'x-forge-token': token },
+        body: form,
+      });
+      if (direct.status !== 401 && direct.status !== 403) {
+        return direct;
+      }
+    }
+  } catch {
+    // Network/CORS failure on the direct path: use the proxy below.
+  }
+
+  return fetch(`/api/pdf-tools/${toolId}`, { method: 'POST', body: form });
+}
+
 function parseFilenameFromDisposition(headerValue, fallback) {
   if (!headerValue) return fallback;
   const utfMatch = /filename\*=UTF-8''([^;]+)/i.exec(headerValue);
@@ -51,6 +91,7 @@ export default function BackendToolClient({ toolId }) {
   const [dragActive, setDragActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState('');
+  const [result, setResult] = useState('');
   const [password, setPassword] = useState('');
   const [ownerPassword, setOwnerPassword] = useState('');
   const [compressionLevel, setCompressionLevel] = useState('medium');
@@ -62,6 +103,15 @@ export default function BackendToolClient({ toolId }) {
 
   const handleFile = (selectedFile) => {
     setError('');
+    setResult('');
+    if (selectedFile && selectedFile.size > MAX_UPLOAD_BYTES) {
+      setError('This file is larger than 50 MB. Please choose a smaller file.');
+      return;
+    }
+    if (selectedFile && PDF_INPUT_TOOLS.has(toolId) && selectedFile.type !== 'application/pdf' && !/\.pdf$/i.test(selectedFile.name)) {
+      setError('Please choose a PDF file.');
+      return;
+    }
     setFile(selectedFile || null);
   };
 
@@ -89,6 +139,7 @@ export default function BackendToolClient({ toolId }) {
   const runTool = async () => {
     setIsProcessing(true);
     setError('');
+    setResult('');
 
     try {
       const form = new FormData();
@@ -106,29 +157,30 @@ export default function BackendToolClient({ toolId }) {
         form.append('html_content', htmlContent);
       }
 
-      const res = await fetch(`/api/pdf-tools/${toolId}`, {
-        method: 'POST',
-        body: form,
-      });
+      const res = await submitToolRequest(toolId, form);
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Failed to process file.');
+        throw new Error(err.error || STATUS_MESSAGES[res.status] || 'Failed to process file.');
       }
 
       const blob = await res.blob();
       const disposition = res.headers.get('content-disposition');
-      const fallbackName = file ? `converted_${file.name}` : `${toolId}.pdf`;
+      const fallbackName = file ? `${stripExtension(file.name)}_converted` : `${toolId}.pdf`;
       const filename = parseFilenameFromDisposition(disposition, fallbackName);
 
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, filename);
+
+      const originalSize = Number(res.headers.get('x-original-size'));
+      const outputSize = Number(res.headers.get('x-output-size'));
+      if (toolId === 'compress-pdf' && originalSize && outputSize) {
+        const saved = Math.round((1 - outputSize / originalSize) * 100);
+        setResult(saved > 0
+          ? `Reduced from ${formatFileSize(originalSize)} to ${formatFileSize(outputSize)} (${saved}% smaller).`
+          : 'This PDF is already well optimized; no further reduction was possible.');
+      } else {
+        setResult(`Done. ${filename} has been downloaded.`);
+      }
 
       const user = auth.currentUser;
       if (user && tool) {
@@ -169,7 +221,7 @@ export default function BackendToolClient({ toolId }) {
         <p className="muted" style={{ fontSize: '1.05rem' }}>{tool.description}</p>
       </div>
 
-      <div style={{ display: 'grid', gap: '18px', gridTemplateColumns: '1fr 320px' }}>
+      <div style={{ display: 'grid', gap: '18px', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))' }}>
         <div
           onDragEnter={onDrag}
           onDragOver={onDrag}
@@ -222,9 +274,9 @@ export default function BackendToolClient({ toolId }) {
             <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               Compression Level
               <select className="field" value={compressionLevel} onChange={(e) => setCompressionLevel(e.target.value)}>
-                <option value="low">Low (smallest size)</option>
-                <option value="medium">Medium</option>
-                <option value="high">High (best quality)</option>
+                <option value="low">Extreme (smallest file, lower quality)</option>
+                <option value="medium">Recommended (good quality, good compression)</option>
+                <option value="high">Less compression (best quality)</option>
               </select>
             </label>
           ) : null}
@@ -281,6 +333,7 @@ export default function BackendToolClient({ toolId }) {
           ) : null}
 
           {error ? <p className="error-text" style={{ margin: 0 }}>{error}</p> : null}
+          {result ? <p className="muted" role="status" style={{ margin: 0 }}>{result}</p> : null}
 
           <button
             className="primary-btn"

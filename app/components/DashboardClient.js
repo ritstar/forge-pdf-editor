@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import {
   CheckCircle2,
   FilePlus2,
@@ -23,6 +23,7 @@ import {
   where,
   orderBy,
   limit,
+  getDoc,
   getDocs,
   addDoc,
   deleteDoc,
@@ -33,6 +34,9 @@ import ForgeLogo from './ForgeLogo';
 import { TOOLS } from '@/lib/toolsData';
 import Footer from './Footer';
 import { sanitizeName } from '@/lib/sanitize';
+import { deleteBlobs, uploadToBlob } from '@/lib/blobClient';
+import { isPdfFile } from '@/app/utils/files';
+import { useTheme } from '@/app/utils/useTheme';
 
 export default function DashboardClient() {
   const router = useRouter();
@@ -47,19 +51,8 @@ export default function DashboardClient() {
   const [showHistory, setShowHistory] = useState(false);
   const [refreshIconKey, setRefreshIconKey] = useState(0);
   const dropdownRef = useRef(null);
-  const [theme, setTheme] = useState(() => {
-    if (typeof document === 'undefined') return 'light';
-    return document.documentElement.getAttribute('data-theme') || 'light';
-  });
+  const [theme, toggleTheme] = useTheme();
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    document.documentElement.setAttribute('data-theme', theme);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('forge-theme', theme);
-    }
-  }, [theme]);
 
   // Click outside listener for dropdown
   useEffect(() => {
@@ -72,47 +65,52 @@ export default function DashboardClient() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const loadDashboard = useCallback(async (activeUser) => {
+    setLoading(true);
+    setError('');
+
+    try {
+      // Independent queries: run them in parallel.
+      const [docsSnap, historySnap] = await Promise.all([
+        getDocs(query(
+          collection(db, 'documents'),
+          where('user_id', '==', activeUser.uid),
+          orderBy('updated_at', 'desc'),
+        )),
+        getDocs(query(
+          collection(db, 'tool_history'),
+          where('user_id', '==', activeUser.uid),
+          orderBy('created_at', 'desc'),
+          limit(10),
+        )),
+      ]);
+      setDocuments(docsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setHistory(historySnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('Failed to load dashboard:', err);
+      setError('Failed to load your documents. Please try refreshing.');
+    }
+
+    setLoading(false);
+  }, []);
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (activeUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (activeUser) => {
       if (!activeUser) {
         router.replace('/login');
         return;
       }
 
       setUser(activeUser);
-      setLoading(true);
-      setError('');
-
-      try {
-        const docsQuery = query(
-          collection(db, 'documents'),
-          where('user_id', '==', activeUser.uid),
-          orderBy('updated_at', 'desc'),
-        );
-        const docsSnap = await getDocs(docsQuery);
-        setDocuments(docsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-
-        const historyQuery = query(
-          collection(db, 'tool_history'),
-          where('user_id', '==', activeUser.uid),
-          orderBy('created_at', 'desc'),
-          limit(10),
-        );
-        const historySnap = await getDocs(historyQuery);
-        setHistory(historySnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      } catch (err) {
-        setError(err.message || 'Failed to load data');
-      }
-
-      setLoading(false);
+      loadDashboard(activeUser);
     });
 
     return () => unsubscribe();
-  }, [router]);
+  }, [loadDashboard, router]);
 
   const uploadDocument = async (file) => {
     if (!user || !file) return;
-    if (file.type !== 'application/pdf') {
+    if (!isPdfFile(file)) {
       setError('Please upload a PDF file.');
       return;
     }
@@ -121,31 +119,16 @@ export default function DashboardClient() {
     setError('');
 
     try {
-      const cleanName = sanitizeName(file.name);
+      const cleanName = sanitizeName(file.name.replace(/\.pdf$/i, '')) + '.pdf';
       const blobPath = `documents/${user.uid}/${crypto.randomUUID()}-${cleanName}`;
-      
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('path', blobPath);
-
-      const uploadRes = await fetch('/api/blob/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!uploadRes.ok) {
-        const errData = await uploadRes.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to upload file to storage');
-      }
-
-      const blob = await uploadRes.json();
+      const blob = await uploadToBlob(blobPath, file, 'application/pdf');
 
       const docRef = await addDoc(collection(db, 'documents'), {
         user_id: user.uid,
         title: file.name,
         file_path: blob.url,
         file_size: file.size,
-        mime_type: file.type,
+        mime_type: 'application/pdf',
         status: 'draft',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -162,8 +145,7 @@ export default function DashboardClient() {
   };
 
   const handleSignOut = async () => {
-    await signOut(auth);
-    await fetch('/api/session', { method: 'DELETE' });
+    await Promise.allSettled([signOut(auth), fetch('/api/session', { method: 'DELETE' })]);
     router.push('/');
     router.refresh();
   };
@@ -178,18 +160,20 @@ export default function DashboardClient() {
     setDeletingDocId(docItem.id);
 
     try {
-      // Delete the main PDF from Vercel Blob
-      if (docItem.file_path && docItem.file_path.includes('public.blob.vercel-storage.com')) {
-        await fetch('/api/blob/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: docItem.file_path }),
-        });
-      }
+      // The draft must go before its parent: its security rule reads the parent document.
+      const draftRef = doc(db, 'documents', docItem.id, 'drafts', 'current');
+      const draftSnap = await getDoc(draftRef).catch(() => null);
+      const draftAssetUrls = (draftSnap?.data()?.editor_state?.elements || [])
+        .filter((item) => item?.type === 'image' && item.assetBucket === 'draft_assets')
+        .map((item) => item.storagePath || item.url);
+      if (draftSnap?.exists()) await deleteDoc(draftRef);
 
-      // Delete the Firestore document (cascading deletes for drafts aren't automatic in client SDK, 
-      // but fine for this scope)
       await deleteDoc(doc(db, 'documents', docItem.id));
+
+      // Storage cleanup is best-effort; the document is already gone for the user.
+      deleteBlobs([docItem.file_path, ...draftAssetUrls]).catch((err) => {
+        console.error('Failed to delete stored files:', err);
+      });
 
       setDocuments((prev) => prev.filter((item) => item.id !== docItem.id));
       setPendingDeleteDoc(null);
@@ -222,7 +206,7 @@ export default function DashboardClient() {
           <button
             className="ghost-btn theme-toggle"
             type="button"
-            onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+            onClick={toggleTheme}
             aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
@@ -236,7 +220,7 @@ export default function DashboardClient() {
             title="Refresh dashboard"
             onClick={() => {
               setRefreshIconKey((prev) => prev + 1);
-              router.refresh();
+              if (user) loadDashboard(user);
             }}
           >
             <RefreshCw key={refreshIconKey} size={16} className="refresh-spin-once" />

@@ -108,6 +108,8 @@ BLOB_READ_WRITE_TOKEN=...
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 PDF_TOOLS_API_URL=http://localhost:8000
 PDF_TOOLS_API_SECRET=your-shared-secret
+# Optional: backend URL as reachable from the browser, if it differs from PDF_TOOLS_API_URL
+# PDF_TOOLS_PUBLIC_URL=https://forge-pdf-tools-api.onrender.com
 ```
 
 ### 3. Configure Firebase
@@ -169,16 +171,16 @@ PDF_TOOLS_API_SECRET=your-shared-secret
 
 ## Notes About Backend Tooling
 
-- Backend-powered tools are proxied through the Next.js route at `app/api/pdf-tools/[toolId]/route.js`
-- The browser talks to the Next.js app, and Next.js forwards requests to the FastAPI backend
-- This keeps the backend URL configurable through `PDF_TOOLS_API_URL`
-- Backend requests are protected with a shared server-side secret via `PDF_TOOLS_API_SECRET`
-- The same secret must be configured in both the frontend server environment and the backend service environment
+- `GET /api/pdf-tools/[toolId]` issues a 10-minute, tool-scoped HMAC token (signed with `PDF_TOOLS_API_SECRET`) and the browser uploads straight to the FastAPI backend. This avoids Vercel's 4.5 MB function body limit.
+- If the backend is unreachable from the browser (CORS, network) or rejects the token, the client falls back to `POST /api/pdf-tools/[toolId]`, which streams the request through Next.js with the shared secret.
+- The backend's `CORS_ORIGINS` must include the frontend origin for the direct path; preview deployments not listed there use the proxy automatically.
+- The same secret must be configured in both the frontend server environment and the backend service environment.
+- Compression uses Ghostscript presets and returns whichever is smallest of the Ghostscript result, a lossless qpdf optimisation, or the original.
 
 ## Security Notes
 
-- Blob upload and delete routes require a valid authenticated session
-- Blob uploads are restricted by allowed path prefixes, file types, and size limits
+- Files upload directly from the browser to Vercel Blob using short-lived client tokens from `/api/blob/upload`, which requires a valid session
+- Upload tokens are restricted to the caller's own path prefix, allowed content types, and size limits
 - Blob deletes are restricted to assets owned by the requesting user
 - The backend tool service is protected by an API secret and request rate limiting
 - The web app includes stricter security headers for production

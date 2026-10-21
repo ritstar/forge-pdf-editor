@@ -1,16 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { PDFDocument } from 'pdf-lib';
-import { Document, Page, pdfjs } from 'react-pdf';
+import { Document, Page } from 'react-pdf';
+import '@/app/utils/pdfWorker';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
+import { downloadPdfBytes, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
 import { FilePlus2, LayoutGrid, Trash2, X, RefreshCw, ChevronUp, ChevronDown, Undo2 } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
-// Configure PDF worker
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 export default function OrganizePdfPage() {
     const [file, setFile] = useState(null);
@@ -42,7 +42,7 @@ export default function OrganizePdfPage() {
 
     const handleFile = (selectedFile) => {
         setError('');
-        if (selectedFile.type !== 'application/pdf') {
+        if (!isPdfFile(selectedFile)) {
             setError('Please select a valid PDF file.');
             return;
         }
@@ -102,17 +102,17 @@ export default function OrganizePdfPage() {
         ].slice(-120));
     };
 
-    const handleMoveUp = useCallback((displayIndex) => {
+    const handleMoveUp = (displayIndex) => {
         movePage(displayIndex, displayIndex - 1);
-    }, []);
+    };
 
-    const handleMoveDown = useCallback((displayIndex) => {
+    const handleMoveDown = (displayIndex) => {
         movePage(displayIndex, displayIndex + 1);
-    }, []);
+    };
 
-    const handleToggleDelete = useCallback((pageIndex) => {
+    const handleToggleDelete = (pageIndex) => {
         togglePageDeletion(pageIndex);
-    }, []);
+    };
 
     const addMoveHistory = (pageIndex, fromPos, toPos) => {
         const latest = changeHistoryRef.current[0];
@@ -233,16 +233,7 @@ export default function OrganizePdfPage() {
             });
 
             const newPdfBytes = await newPdf.save();
-            const blob = new Blob([newPdfBytes], { type: 'application/pdf' });
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `organized_${file.name}`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            downloadPdfBytes(newPdfBytes, `organized_${file.name}`);
 
             const user = auth.currentUser;
             if (user) {
@@ -304,7 +295,7 @@ export default function OrganizePdfPage() {
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept="application/pdf"
+                        accept="application/pdf,.pdf"
                         style={{ display: 'none' }}
                         onChange={(e) => {
                             if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);

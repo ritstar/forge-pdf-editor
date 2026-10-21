@@ -3,25 +3,14 @@
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { ArrowLeft, Moon, Sun } from 'lucide-react';
-import { useEffect, useState } from 'react';
 import ForgeLogo from '@/app/components/ForgeLogo';
 import Footer from '@/app/components/Footer';
+import { useTheme } from '@/app/utils/useTheme';
 
 export default function ToolsLayout({ children }) {
     const router = useRouter();
     const pathname = usePathname();
-    const [theme, setTheme] = useState(() => {
-        if (typeof document === 'undefined') return 'light';
-        return document.documentElement.getAttribute('data-theme') || 'light';
-    });
-
-    useEffect(() => {
-        if (typeof document === 'undefined') return;
-        document.documentElement.setAttribute('data-theme', theme);
-        if (typeof window !== 'undefined') {
-            window.localStorage.setItem('forge-theme', theme);
-        }
-    }, [theme]);
+    const [theme, toggleTheme] = useTheme();
 
     // Don't wrap in layout if we somehow hit the root /tools (though we probably won't)
     if (pathname === '/tools') return children;
@@ -51,7 +40,7 @@ export default function ToolsLayout({ children }) {
                     <button
                         className="ghost-btn theme-toggle"
                         type="button"
-                        onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+                        onClick={toggleTheme}
                         aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
                         style={{ padding: '8px', minHeight: 'auto' }}
                     >

@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
+import { downloadPdfBytes, formatFileSize } from '@/app/utils/files';
+import { toEmbeddableImage } from '@/app/utils/imageNormalize';
 import { Plus, Trash2, FileImage, Image as ImageIcon, GripVertical } from 'lucide-react';
 
 export default function JpgToPdfPage() {
@@ -12,6 +14,14 @@ export default function JpgToPdfPage() {
     const [error, setError] = useState('');
     const [dragActive, setDragActive] = useState(false);
     const fileInputRef = useRef(null);
+    const imagesRef = useRef(images);
+
+    useEffect(() => {
+        imagesRef.current = images;
+    }, [images]);
+
+    // Release preview URLs when leaving the page.
+    useEffect(() => () => imagesRef.current.forEach((img) => URL.revokeObjectURL(img.url)), []);
 
     const handleFiles = (newFiles) => {
         setError('');
@@ -26,7 +36,7 @@ export default function JpgToPdfPage() {
             file,
             name: file.name,
             url: URL.createObjectURL(file),
-            size: (file.size / 1024 / 1024).toFixed(2) + ' MB'
+            size: formatFileSize(file.size)
         }));
 
         setImages(prev => [...prev, ...newImagesWithId]);
@@ -52,7 +62,11 @@ export default function JpgToPdfPage() {
     };
 
     const removeImage = (id) => {
-        setImages(prev => prev.filter(img => img.id !== id));
+        setImages(prev => {
+            const removed = prev.find(img => img.id === id);
+            if (removed) URL.revokeObjectURL(removed.url);
+            return prev.filter(img => img.id !== id);
+        });
     };
 
     const moveImage = (index, direction) => {
@@ -74,18 +88,15 @@ export default function JpgToPdfPage() {
             const pdfDoc = await PDFDocument.create();
 
             for (const imgObj of images) {
-                const imageBuffer = await imgObj.file.arrayBuffer();
-                let embeddedImage;
-
-                if (imgObj.file.type === 'image/jpeg' || imgObj.file.type === 'image/jpg') {
-                    embeddedImage = await pdfDoc.embedJpg(imageBuffer);
-                } else if (imgObj.file.type === 'image/png') {
-                    embeddedImage = await pdfDoc.embedPng(imageBuffer);
-                } else {
-                    // If unsupported (like WebP/GIF), skip or handle via canvas.
-                    // pdf-lib only natively supports PNG and JPG.
-                    throw new Error(`Unsupported image format: ${imgObj.file.type}. Please use JPG or PNG.`);
+                let image;
+                try {
+                    image = await toEmbeddableImage(imgObj.file);
+                } catch {
+                    throw new Error(`"${imgObj.name}" could not be read as an image.`);
                 }
+                const embeddedImage = image.kind === 'png'
+                    ? await pdfDoc.embedPng(image.bytes)
+                    : await pdfDoc.embedJpg(image.bytes);
 
                 const { width, height } = embeddedImage.scale(1);
                 const page = pdfDoc.addPage([width, height]);
@@ -99,16 +110,7 @@ export default function JpgToPdfPage() {
             }
 
             const pdfBytes = await pdfDoc.save();
-            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `images_converted_${Date.now()}.pdf`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            downloadPdfBytes(pdfBytes, `images_converted_${Date.now()}.pdf`);
 
             const user = auth.currentUser;
             if (user) {
@@ -169,7 +171,7 @@ export default function JpgToPdfPage() {
                         ref={fileInputRef}
                         type="file"
                         multiple
-                        accept="image/jpeg, image/png"
+                        accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
                         style={{ display: 'none' }}
                         onChange={(e) => {
                             if (e.target.files) handleFiles(e.target.files);
@@ -189,7 +191,7 @@ export default function JpgToPdfPage() {
                                 ref={fileInputRef}
                                 type="file"
                                 multiple
-                                accept="image/jpeg, image/png"
+                                accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
                                 style={{ display: 'none' }}
                                 onChange={(e) => {
                                     if (e.target.files) handleFiles(e.target.files);

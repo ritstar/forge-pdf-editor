@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
+import { downloadPdfBytes, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
 import { Plus, Trash2, GripVertical, FileText, Combine, FilePlus2 } from 'lucide-react';
 
 export default function MergePdfPage() {
@@ -15,7 +16,7 @@ export default function MergePdfPage() {
 
     const handleFiles = (newFiles) => {
         setError('');
-        const validFiles = Array.from(newFiles).filter(file => file.type === 'application/pdf');
+        const validFiles = Array.from(newFiles).filter(isPdfFile);
         if (validFiles.length !== newFiles.length) {
             setError('Some files were ignored because they are not PDFs.');
         }
@@ -25,7 +26,7 @@ export default function MergePdfPage() {
             id: crypto.randomUUID(),
             file,
             name: file.name,
-            size: (file.size / 1024 / 1024).toFixed(2) + ' MB'
+            size: formatFileSize(file.size)
         }));
 
         setFiles(prev => [...prev, ...newFilesWithId]);
@@ -77,7 +78,15 @@ export default function MergePdfPage() {
 
             for (const fileObj of files) {
                 const fileBuffer = await fileObj.file.arrayBuffer();
-                const pdf = await PDFDocument.load(fileBuffer);
+                let pdf;
+                try {
+                    pdf = await PDFDocument.load(fileBuffer);
+                } catch (loadError) {
+                    if (loadError?.name === 'EncryptedPDFError') {
+                        throw new Error(`"${fileObj.name}" is password protected. Unlock it first.`);
+                    }
+                    throw new Error(`"${fileObj.name}" could not be read. It may be corrupted.`);
+                }
                 const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
                 copiedPages.forEach((page) => {
                     mergedPdf.addPage(page);
@@ -85,16 +94,7 @@ export default function MergePdfPage() {
             }
 
             const mergedPdfFile = await mergedPdf.save();
-            const blob = new Blob([mergedPdfFile], { type: 'application/pdf' });
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `merged_${Date.now()}.pdf`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            downloadPdfBytes(mergedPdfFile, `merged_${Date.now()}.pdf`);
 
             const user = auth.currentUser;
             if (user) {
@@ -103,7 +103,7 @@ export default function MergePdfPage() {
 
         } catch (err) {
             console.error(err);
-            setError('An error occurred while merging the PDFs. Make sure they are valid PDF files.');
+            setError(err.message || 'An error occurred while merging the PDFs. Make sure they are valid PDF files.');
         } finally {
             setIsProcessing(false);
         }
@@ -153,7 +153,7 @@ export default function MergePdfPage() {
                         ref={fileInputRef}
                         type="file"
                         multiple
-                        accept="application/pdf"
+                        accept="application/pdf,.pdf"
                         style={{ display: 'none' }}
                         onChange={(e) => {
                             if (e.target.files) handleFiles(e.target.files);
@@ -173,7 +173,7 @@ export default function MergePdfPage() {
                                 ref={fileInputRef}
                                 type="file"
                                 multiple
-                                accept="application/pdf"
+                                accept="application/pdf,.pdf"
                                 style={{ display: 'none' }}
                                 onChange={(e) => {
                                     if (e.target.files) handleFiles(e.target.files);

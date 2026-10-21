@@ -1,31 +1,42 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import { pdfjs } from 'react-pdf';
+import { useEffect, useState, useRef } from 'react';
+import { pdfjs } from '@/app/utils/pdfWorker';
 import JSZip from 'jszip';
-import { saveAs } from 'file-saver';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
+import { downloadBlob, isPdfFile, stripExtension } from '@/app/utils/files';
+import { renderPdfPageToBlob } from '@/app/utils/pdfToImage';
 import { FilePlus2, FileImage, Trash2, Download, Settings, RefreshCw, X } from 'lucide-react';
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 export default function PdfToJpgClient() {
     const [file, setFile] = useState(null);
     const [extractedImages, setExtractedImages] = useState([]);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [progress, setProgress] = useState('');
     const [error, setError] = useState('');
     const [dragActive, setDragActive] = useState(false);
     const fileInputRef = useRef(null);
+    const imagesRef = useRef([]);
+
+    // Previews are object URLs backed by Blobs; release them whenever the set is replaced.
+    const replaceImages = (next) => {
+        imagesRef.current.forEach((img) => URL.revokeObjectURL(img.url));
+        imagesRef.current = next;
+        setExtractedImages(next);
+    };
+
+    useEffect(() => () => imagesRef.current.forEach((img) => URL.revokeObjectURL(img.url)), []);
 
     const handleFile = (selectedFile) => {
         setError('');
-        if (selectedFile.type !== 'application/pdf') {
+        if (!isPdfFile(selectedFile)) {
             setError('Please select a valid PDF file.');
             return;
         }
         setFile(selectedFile);
-        setExtractedImages([]);
+        replaceImages([]);
     };
 
     const handleDrag = (e) => {
@@ -50,40 +61,38 @@ export default function PdfToJpgClient() {
     const extractImages = async () => {
         if (!file) return;
 
+        let pdf;
         try {
             setIsProcessing(true);
             setError('');
-            setExtractedImages([]);
+            replaceImages([]);
 
             const fileBuffer = await file.arrayBuffer();
-            const pdf = await pdfjs.getDocument(fileBuffer).promise;
+            pdf = await pdfjs.getDocument({ data: fileBuffer }).promise;
             const totalPages = pdf.numPages;
+            const baseName = stripExtension(file.name);
             const images = [];
 
             for (let i = 1; i <= totalPages; i++) {
-                const page = await pdf.getPage(i);
-                const viewport = page.getViewport({ scale: 2 }); // Higher scale = better quality
-
-                const canvas = document.createElement('canvas');
-                canvas.width = viewport.width;
-                canvas.height = viewport.height;
-                const context = canvas.getContext('2d');
-
-                await page.render({ canvasContext: context, viewport }).promise;
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-
+                setProgress(`Rendering page ${i} of ${totalPages}...`);
+                const blob = await renderPdfPageToBlob(pdf, i, { scale: 2, format: 'jpeg', quality: 0.9 });
                 images.push({
                     id: i,
-                    dataUrl,
-                    name: `${file.name.replace('.pdf', '')}_page_${i}.jpg`
+                    blob,
+                    url: URL.createObjectURL(blob),
+                    name: `${baseName}_page_${i}.jpg`,
                 });
             }
 
-            setExtractedImages(images);
+            replaceImages(images);
         } catch (err) {
             console.error(err);
-            setError('An error occurred while extracting images from the PDF.');
+            setError(err?.name === 'PasswordException'
+                ? 'This PDF is password protected. Unlock it first.'
+                : 'An error occurred while extracting images from the PDF.');
         } finally {
+            pdf?.destroy();
+            setProgress('');
             setIsProcessing(false);
         }
     };
@@ -92,7 +101,7 @@ export default function PdfToJpgClient() {
         if (!extractedImages.length) return;
 
         if (extractedImages.length === 1) {
-            saveAs(extractedImages[0].dataUrl, extractedImages[0].name);
+            downloadBlob(extractedImages[0].blob, extractedImages[0].name);
             return;
         }
 
@@ -100,14 +109,13 @@ export default function PdfToJpgClient() {
             setIsProcessing(true);
             const zip = new JSZip();
 
+            // JPEGs are already compressed; STORE avoids burning CPU on re-deflating them.
             extractedImages.forEach((img) => {
-                // Strip out the data url prefix specifically "data:image/jpeg;base64,"
-                const base64Data = img.dataUrl.split(',')[1];
-                zip.file(img.name, base64Data, { base64: true });
+                zip.file(img.name, img.blob, { compression: 'STORE' });
             });
 
             const content = await zip.generateAsync({ type: 'blob' });
-            saveAs(content, `${file.name.replace('.pdf', '')}_images.zip`);
+            downloadBlob(content, `${stripExtension(file.name)}_images.zip`);
 
             const user = auth.currentUser;
             if (user) {
@@ -167,7 +175,7 @@ export default function PdfToJpgClient() {
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept="application/pdf"
+                        accept="application/pdf,.pdf"
                         style={{ display: 'none' }}
                         onChange={(e) => {
                             if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
@@ -187,7 +195,7 @@ export default function PdfToJpgClient() {
                         </div>
 
                         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                            <button onClick={() => { setFile(null); setExtractedImages([]); }} className="ghost-btn">
+                            <button onClick={() => { setFile(null); replaceImages([]); }} className="ghost-btn">
                                 <X size={16} /> Cancel
                             </button>
 
@@ -198,7 +206,7 @@ export default function PdfToJpgClient() {
                                     className="primary-btn"
                                     style={{ background: '#D69E2E', opacity: isProcessing ? 0.6 : 1 }}
                                 >
-                                    {isProcessing ? <><RefreshCw size={16} className="spin" /> Extracting...</> : 'Convert to JPG'}
+                                    {isProcessing ? <><RefreshCw size={16} className="spin" /> {progress || 'Extracting...'}</> : 'Convert to JPG'}
                                 </button>
                             ) : (
                                 <button
@@ -250,7 +258,7 @@ export default function PdfToJpgClient() {
                                         }}>
                                             {/* eslint-disable-next-line @next/next/no-img-element */}
                                             <img
-                                                src={img.dataUrl}
+                                                src={img.url}
                                                 alt={img.name}
                                                 style={{ width: '100%', height: 'auto', display: 'block' }}
                                             />
@@ -258,7 +266,7 @@ export default function PdfToJpgClient() {
                                         <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <span className="muted" style={{ fontSize: '0.85rem' }}>Page {img.id}</span>
                                             <button
-                                                onClick={() => saveAs(img.dataUrl, img.name)}
+                                                onClick={() => downloadBlob(img.blob, img.name)}
                                                 className="ghost-btn"
                                                 style={{ padding: '6px' }}
                                                 title="Download Image"
