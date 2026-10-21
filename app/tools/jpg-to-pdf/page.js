@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument } from '@cantoo/pdf-lib';
 import { ArrowLeft, ArrowRight, FileImage, ImagePlus, X } from 'lucide-react';
 import ToolShell from '@/app/components/ToolShell';
 import { auth } from '@/lib/firebase/config';

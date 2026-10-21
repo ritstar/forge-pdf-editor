@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, degrees } from '@cantoo/pdf-lib';
 import { Document } from 'react-pdf';
 import { Stamp } from 'lucide-react';
 import '@/app/utils/pdfWorker';
 import ToolShell from '@/app/components/ToolShell';
 import LazyPage from '@/app/components/ui/LazyPage';
-import { makeTextEncoder } from '@/app/utils/pdfGenerator';
+import { createFontKit } from '@/app/utils/pdfFonts';
 import { getPageFrame, visualToPdf } from '@/app/utils/pdfCoords';
 import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
@@ -60,11 +60,12 @@ export default function WatermarkPage() {
             setResult('');
 
             const pdfDoc = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
-            const helveticaFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-            // Helvetica only covers WinAnsi; unsupported characters would abort the export.
-            const text = makeTextEncoder(helveticaFont)(watermarkText.trim());
-            const widthAtOne = helveticaFont.widthOfTextAtSize(text, 1);
+            // Picks Helvetica for plain text, Noto fonts for anything else (accents, ₹, Hindi…).
+            const fonts = await createFontKit(pdfDoc);
+            const layout = await fonts.forText(watermarkText.trim(), { bold: true });
+            const runs = layout.runsOf(layout.text);
+            const widthAtOne = layout.widthOf(layout.text, 1);
+            const capFont = runs[0].font;
 
             pdfDoc.getPages().forEach((page) => {
                 const frame = getPageFrame(page);
@@ -72,23 +73,31 @@ export default function WatermarkPage() {
                 const diagonal = Math.hypot(frame.width, frame.height);
                 const fontSize = Math.max(10, Math.min(72, (diagonal * 0.7) / widthAtOne));
                 const textWidth = widthAtOne * fontSize;
-                const capHeight = helveticaFont.heightAtSize(fontSize, { descender: false });
+                const capHeight = capFont.heightAtSize(fontSize, { descender: false });
 
                 // Read bottom-left to top-right as displayed; add /Rotate so rotated pages match.
                 const angle = (Math.atan2(frame.height, frame.width) * 180) / Math.PI + frame.rotation;
                 const rad = (angle * Math.PI) / 180;
                 const center = visualToPdf(frame, frame.width / 2, frame.height / 2);
 
-                page.drawText(text, {
-                    // Shift from the center by half the rotated text box.
-                    x: center.x - (textWidth / 2) * Math.cos(rad) + (capHeight / 2) * Math.sin(rad),
-                    y: center.y - (textWidth / 2) * Math.sin(rad) - (capHeight / 2) * Math.cos(rad),
-                    size: fontSize,
-                    font: helveticaFont,
-                    color: rgb(...color.value),
-                    opacity: Number(opacity),
-                    rotate: degrees(angle),
-                });
+                // Start from the center, shifted back by half the rotated text box, then lay out
+                // each font run along the rotated baseline.
+                let x = center.x - (textWidth / 2) * Math.cos(rad) + (capHeight / 2) * Math.sin(rad);
+                let y = center.y - (textWidth / 2) * Math.sin(rad) - (capHeight / 2) * Math.cos(rad);
+                for (const run of runs) {
+                    page.drawText(run.text, {
+                        x,
+                        y,
+                        size: fontSize,
+                        font: run.font,
+                        color: rgb(...color.value),
+                        opacity: Number(opacity),
+                        rotate: degrees(angle),
+                    });
+                    const advance = run.font.widthOfTextAtSize(run.text, fontSize);
+                    x += advance * Math.cos(rad);
+                    y += advance * Math.sin(rad);
+                }
             });
 
             downloadPdfBytes(await pdfDoc.save(), `${stripExtension(file.name)}_watermarked.pdf`);

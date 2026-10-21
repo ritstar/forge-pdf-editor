@@ -1,4 +1,4 @@
-import { degrees } from 'pdf-lib';
+import { degrees } from '@cantoo/pdf-lib';
 
 // Maps "visual" coordinates (what the user sees: origin top-left of the displayed page, in
 // points) to PDF user space, accounting for the page's /Rotate and CropBox offset. Viewers

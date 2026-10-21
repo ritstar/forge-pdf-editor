@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { Hash } from 'lucide-react';
 import ToolShell from '@/app/components/ToolShell';
 import { getPageFrame, placeAt } from '@/app/utils/pdfCoords';

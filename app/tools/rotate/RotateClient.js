@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { PDFDocument, degrees } from 'pdf-lib';
+import { PDFDocument, degrees } from '@cantoo/pdf-lib';
 import { Document } from 'react-pdf';
 import { RotateCcw, RotateCw, Undo2 } from 'lucide-react';
 import '@/app/utils/pdfWorker';

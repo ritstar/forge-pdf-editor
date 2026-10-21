@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { PDFDocument } from 'pdf-lib';
-import JSZip from 'jszip';
+import { PDFDocument } from '@cantoo/pdf-lib';
+import { zipSync } from 'fflate';
 import { Document } from 'react-pdf';
 import { Split } from 'lucide-react';
 import '@/app/utils/pdfWorker';
@@ -79,14 +79,15 @@ export default function SplitPdfPage() {
                 downloadPdfBytes(await newPdf.save(), `${baseName}_pages_${startPage}-${endPage}.pdf`);
                 setResult(`Extracted ${indices.length} ${indices.length === 1 ? 'page' : 'pages'} — downloaded.`);
             } else {
-                const zip = new JSZip();
+                const entries = {};
                 for (let i = 0; i < totalPages; i += 1) {
                     const single = await PDFDocument.create();
                     const [page] = await single.copyPages(originalPdf, [i]);
                     single.addPage(page);
-                    zip.file(`${baseName}_page_${String(i + 1).padStart(String(totalPages).length, '0')}.pdf`, await single.save());
+                    entries[`${baseName}_page_${String(i + 1).padStart(String(totalPages).length, '0')}.pdf`] = await single.save();
                 }
-                downloadBlob(await zip.generateAsync({ type: 'blob' }), `${baseName}_pages.zip`);
+                // PDF streams are already compressed; storing (level 0) makes zipping near-instant.
+                downloadBlob(new Blob([zipSync(entries, { level: 0 })], { type: 'application/zip' }), `${baseName}_pages.zip`);
                 setResult(`Created ${totalPages} PDFs — ZIP downloaded.`);
             }
 

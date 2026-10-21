@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import JSZip from 'jszip';
+import { zipSync } from 'fflate';
 import { Download, Image as ImageIcon } from 'lucide-react';
 import { pdfjs } from '@/app/utils/pdfWorker';
 import ToolShell from '@/app/components/ToolShell';
@@ -93,10 +93,12 @@ export default function PdfToJpgClient() {
         try {
             setIsProcessing(true);
             setProgress('Creating ZIP…');
-            const zip = new JSZip();
-            // Images are already compressed; STORE avoids burning CPU on re-deflating them.
-            images.forEach((img) => zip.file(img.name, img.blob, { compression: 'STORE' }));
-            downloadBlob(await zip.generateAsync({ type: 'blob' }), `${stripExtension(file.name)}_images.zip`);
+            const entries = {};
+            for (const img of images) {
+                entries[img.name] = new Uint8Array(await img.blob.arrayBuffer());
+            }
+            // Images are already compressed; storing (level 0) avoids re-deflating them.
+            downloadBlob(new Blob([zipSync(entries, { level: 0 })], { type: 'application/zip' }), `${stripExtension(file.name)}_images.zip`);
         } catch (err) {
             console.error(err);
             setError('Failed to create ZIP file.');

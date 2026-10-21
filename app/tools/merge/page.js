@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument } from '@cantoo/pdf-lib';
 import { ArrowDown, ArrowUp, Combine, GripVertical, Plus, X } from 'lucide-react';
 import ToolShell from '@/app/components/ToolShell';
 import { auth } from '@/lib/firebase/config';

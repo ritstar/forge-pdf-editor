@@ -64,10 +64,11 @@ Forge PDF Editor is a full PDF toolkit built with Next.js, Firebase, Vercel Blob
 - Vercel Blob
 - `react-pdf`
 - `pdfjs-dist`
-- `pdf-lib`
+- `@cantoo/pdf-lib` (maintained fork of pdf-lib) with `@cantoo/fontkit` and Noto fonts for Unicode text
+- `fflate` for ZIP downloads
 - FastAPI
 - Docker
-- LibreOffice, Ghostscript, qpdf, WeasyPrint, PyMuPDF
+- LibreOffice, Ghostscript, pikepdf (qpdf), WeasyPrint, PyMuPDF, pdf2docx
 
 ## Project Structure
 

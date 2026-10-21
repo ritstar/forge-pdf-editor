@@ -17,8 +17,8 @@ from threading import BoundedSemaphore, Lock
 from typing import Optional
 from urllib.parse import urlparse
 
-import fitz
 import pikepdf
+import pymupdf
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,7 +36,7 @@ from pptx.util import Emu
 
 
 APP_TITLE = "Forge PDF Tools API"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 API_KEY_HEADER = "x-api-key"
 TOKEN_HEADER = "x-forge-token"
 API_KEY_ENV = "PDF_TOOLS_API_SECRET"
@@ -245,9 +245,9 @@ def _safe_html_fetcher(url: str, *args, **kwargs):
     return default_url_fetcher(url, *args, **kwargs)
 
 
-def _open_pdf(input_path: Path) -> fitz.Document:
+def _open_pdf(input_path: Path) -> pymupdf.Document:
     try:
-        doc = fitz.open(str(input_path))
+        doc = pymupdf.open(str(input_path))
     except Exception as exc:
         raise HTTPException(status_code=400, detail="This file is not a valid PDF.") from exc
     if doc.needs_pass:
@@ -256,7 +256,35 @@ def _open_pdf(input_path: Path) -> fitz.Document:
     return doc
 
 
+# pdf2docx reconstructs layout (columns, tables, images, fonts); very long documents use the
+# lighter text-block conversion so a single request can't monopolise the worker.
+PDF2DOCX_MAX_PAGES = int(os.getenv("PDF2DOCX_MAX_PAGES", "150"))
+
+
 def _pdf_to_word(input_path: Path, output_path: Path, tmpdir: Path) -> None:
+    with _open_pdf(input_path) as pdf:
+        page_count = len(pdf)
+
+    if page_count <= PDF2DOCX_MAX_PAGES:
+        try:
+            # Imported lazily: it pulls in OpenCV, which is only needed for this tool.
+            from pdf2docx import Converter
+
+            with _heavy_jobs:
+                converter = Converter(str(input_path))
+                try:
+                    converter.convert(str(output_path), multi_processing=False)
+                finally:
+                    converter.close()
+            if output_path.exists() and output_path.stat().st_size > 0:
+                return
+        except Exception:  # pragma: no cover - fall back to the simpler conversion
+            logger.exception("pdf2docx failed; falling back to text-block conversion")
+
+    _pdf_to_word_blocks(input_path, output_path, tmpdir)
+
+
+def _pdf_to_word_blocks(input_path: Path, output_path: Path, tmpdir: Path) -> None:
     out = Document()
     style = out.styles["Normal"]
     style.font.size = Pt(11)
@@ -276,7 +304,7 @@ def _pdf_to_word(input_path: Path, output_path: Path, tmpdir: Path) -> None:
 
             # No text layer (scanned page): keep the content visible as an image.
             img_path = tmpdir / f"page-{index + 1}.png"
-            page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False).save(str(img_path))
+            page.get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5), alpha=False).save(str(img_path))
             section = out.sections[-1]
             usable = section.page_width - section.left_margin - section.right_margin
             out.add_picture(str(img_path), width=usable)
@@ -335,7 +363,7 @@ def _pdf_to_powerpoint(input_path: Path, output_path: Path, tmpdir: Path) -> Non
 
         for i, page in enumerate(pdf):
             img_path = tmpdir / f"page-{i + 1}.png"
-            page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False).save(str(img_path))
+            page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False).save(str(img_path))
 
             slide = prs.slides.add_slide(blank_layout)
             # Fit each page inside the slide, preserving its own aspect ratio.
@@ -595,7 +623,7 @@ def run_tool(
                 raise HTTPException(status_code=400, detail="This PDF is password protected. Unlock it first.") from exc
             except pikepdf.PdfError:
                 # qpdf could not recover it; let MuPDF try its own reconstruction.
-                with fitz.open(str(input_path)) as doc:
+                with pymupdf.open(str(input_path)) as doc:
                     doc.save(str(output_path), garbage=3, deflate=True)
             return _as_download(output_path, output_path.name, tmpdir)
 

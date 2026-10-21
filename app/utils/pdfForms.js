@@ -5,7 +5,7 @@ import {
   PDFRadioGroup,
   PDFTextField,
   StandardFonts,
-} from 'pdf-lib';
+} from '@cantoo/pdf-lib';
 
 function getFieldType(field) {
   if (field instanceof PDFTextField) return 'text';
@@ -59,7 +59,7 @@ export function getInitialsFromName(nameOrEmail = '') {
 }
 
 export async function extractFormFieldsFromPdfBytes(pdfBytes) {
-  const { PDFDocument } = await import('pdf-lib');
+  const { PDFDocument } = await import('@cantoo/pdf-lib');
   const pdfDoc = await PDFDocument.load(pdfBytes);
   const form = pdfDoc.getForm();
   const fields = form.getFields();

@@ -1,6 +1,7 @@
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, rgb } from '@cantoo/pdf-lib';
 import { applyFormValuesToPdfDoc } from './pdfForms';
 import { getPageFrame, placeAt } from './pdfCoords';
+import { createFontKit, wrapText } from './pdfFonts';
 
 const LINE_HEIGHT = 1.25; // Matches .text-content line-height in the editor.
 
@@ -22,49 +23,6 @@ function hexToRgb(hex) {
   const g = ((int >> 8) & 255) / 255;
   const b = (int & 255) / 255;
   return rgb(r, g, b);
-}
-
-// Standard fonts only cover WinAnsi; drawing anything else throws and aborts the whole export.
-export function makeTextEncoder(font) {
-  const supported = new Set(font.getCharacterSet());
-  return (text) =>
-    Array.from(String(text).replace(/\t/g, '    '))
-      .map((char) => (supported.has(char.codePointAt(0)) ? char : '?'))
-      .join('');
-}
-
-export function wrapText(text, font, size, maxWidth) {
-  const lines = [];
-  for (const paragraph of String(text).split(/\r?\n/)) {
-    const words = paragraph.split(/(\s+)/).filter((part) => part.length);
-    let line = '';
-
-    for (const word of words) {
-      const candidate = line + word;
-      if (!line || font.widthOfTextAtSize(candidate, size) <= maxWidth) {
-        line = candidate;
-        continue;
-      }
-      lines.push(line.trimEnd());
-      line = word.trimStart();
-    }
-
-    // Hard-break any single word that is wider than the box.
-    const pending = [line];
-    while (pending.length) {
-      let current = pending.shift();
-      if (font.widthOfTextAtSize(current, size) <= maxWidth || current.length <= 1) {
-        lines.push(current);
-        continue;
-      }
-      let cut = current.length - 1;
-      while (cut > 1 && font.widthOfTextAtSize(current.slice(0, cut), size) > maxWidth) cut -= 1;
-      lines.push(current.slice(0, cut));
-      current = current.slice(cut);
-      pending.unshift(current);
-    }
-  }
-  return lines;
 }
 
 async function readImageBytes(element) {
@@ -105,12 +63,7 @@ export async function generatePdf({ pdfBytes, elements = [], formValues = {}, on
   const pdfDoc = await PDFDocument.load(pdfBytes);
   await applyFormValuesToPdfDoc(pdfDoc, formValues);
   const pages = pdfDoc.getPages();
-  const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const encoders = new Map([
-    [regularFont, makeTextEncoder(regularFont)],
-    [boldFont, makeTextEncoder(boldFont)],
-  ]);
+  const fonts = await createFontKit(pdfDoc);
 
   const imageCache = new Map();
   const frames = new Map();
@@ -156,25 +109,24 @@ export async function generatePdf({ pdfBytes, elements = [], formValues = {}, on
     }
 
     if (element.type === 'text' && element.text) {
-      const font = element.bold ? boldFont : regularFont;
       const fontSize = Math.max(7, element.fontSize * frame.width);
       const lineHeight = fontSize * LINE_HEIGHT;
       const inset = fontSize * 0.15;
       const color = hexToRgb(element.color || '#111827');
-      const text = encoders.get(font)(element.text);
-      const lines = wrapText(text, font, fontSize, Math.max(boxWidth - inset * 2, fontSize));
+      const layout = await fonts.forText(element.text, { bold: element.bold });
+      const lines = wrapText(layout.text, layout.widthOf, fontSize, Math.max(boxWidth - inset * 2, fontSize));
 
       // First baseline sits roughly one ascent below the top of the box, like the editor.
       let baseline = top + inset + fontSize * 0.95;
       for (const line of lines) {
         if (baseline > frame.height) break;
-        if (line) {
-          page.drawText(line, {
-            ...placeAt(frame, left + inset, baseline),
-            size: fontSize,
-            font,
-            color,
-          });
+        // Mixed-script lines are drawn run by run, each with a font that has its glyphs.
+        let cursor = left + inset;
+        for (const run of layout.runsOf(line)) {
+          if (run.text.trim()) {
+            page.drawText(run.text, { ...placeAt(frame, cursor, baseline), size: fontSize, font: run.font, color });
+          }
+          cursor += run.font.widthOfTextAtSize(run.text, fontSize);
         }
         baseline += lineHeight;
       }
