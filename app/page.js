@@ -63,7 +63,7 @@ const FEATURES = [
     icon: PenLine,
     color: 'var(--cat-edit)',
     title: 'Edit and sign in minutes',
-    body: 'Place text, images and saved signatures anywhere on the page, fill in PDF forms, and pick up where you left off with autosaved drafts.',
+    body: 'Change the words already in a PDF, even on scans, in a matching font. Place text, images and saved signatures, fill in forms, and pick up where you left off with autosaved drafts.',
   },
   {
     icon: CloudOff,
