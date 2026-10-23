@@ -75,6 +75,8 @@ export function createTextEdit({ id, line, pageIndex, pageWidth }) {
       // The installed font used when the original can't draw the edit.
       match: line.match || '',
       matchExact: Boolean(line.matchExact),
+      // On scans: the match was recognised from the letter shapes (its score, 0..1).
+      detected: line.detected || 0,
       size: line.size,
       color: line.color,
       background: line.background || '#ffffff',
@@ -152,8 +154,9 @@ function toBackendEdit(edit) {
     originX: original.originX,
     baseline: original.baseline,
     size: edit.size,
-    // Always sent: even when the original can't be reused, it picks the matching family.
-    font: original.font,
+    // Always sent: even when the original can't be reused, it picks the matching family. Scans
+    // have no font name, so the font recognised from the scan stands in for it.
+    font: original.font || (original.detected ? original.match : ''),
     reuseOriginal: keepsOriginalStyle(edit),
     fontFamily: edit.fontFamily || '',
     color: edit.color,

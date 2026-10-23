@@ -2635,6 +2635,8 @@ input[type='radio'] {
   grid-template-rows: auto 1fr;
   background: var(--canvas-bg);
   overflow: hidden;
+  /* Unlike hidden, clip can't be scrolled by focusing a field in the off-screen phone drawers. */
+  overflow: clip;
 }
 
 .editor-bar {

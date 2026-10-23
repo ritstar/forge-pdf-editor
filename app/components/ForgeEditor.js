@@ -1621,7 +1621,10 @@ export default function ForgeEditor({
                               : 'a similar font';
                             if (selectedElement.fontFamily) return `Drawn in ${selectedElement.fontFamily}.`;
                             if (original.source === 'ocr') {
-                              return `Recognised from a scan, so ${original.match || 'a similar font'} is used. Pick another font if it looks different.`;
+                              const style = [original.bold && 'bold', original.italic && 'italic'].filter(Boolean).join(' ');
+                              return original.detected
+                                ? `Looks like ${original.match}${style ? ` ${style}` : ''}, detected from the scan. Pick another font if it looks different.`
+                                : `Recognised from a scan, so ${original.match || 'a similar font'} is used. Pick another font if it looks different.`;
                             }
                             if (!keepsOriginalStyle(selectedElement)) {
                               return `Style changed, so ${original.match && !original.matchExact ? `${original.match} (like ${name})` : name || 'a similar font'} will be used in that style.`;

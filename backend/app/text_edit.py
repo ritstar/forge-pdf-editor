@@ -25,7 +25,7 @@ from typing import Optional
 import numpy as np
 import pymupdf
 
-from . import font_library
+from . import font_detect, font_library
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +210,7 @@ def analyze_page(doc: pymupdf.Document, page_number: int = 0) -> dict:
     result["fonts"] = fonts.picker()
     rotate = page.rotation_matrix
     sampler = _ColorSampler(page)
+    words: list[list[tuple[str, pymupdf.Rect]]] = []  # per line, for font detection on scans
     for block in raw["blocks"]:
         for line_no, line in enumerate(block.get("lines", ())):
             spans = [s for s in line["spans"] if s["text"]]
@@ -267,6 +268,27 @@ def analyze_page(doc: pymupdf.Document, page_number: int = 0) -> dict:
                         **style,
                     }
                 )
+                words.append([(s["text"], pymupdf.Rect(s["bbox"]) * rotate) for s in run])
+
+    if source == "ocr" and result["lines"]:
+        # Scans carry no font names: compare the words' shapes with the installed fonts.
+        try:
+            detections = font_detect.detect(page, words, fonts)
+        except Exception:
+            logger.exception("Font detection failed")
+            detections = []
+        for line, found in zip(result["lines"], detections):
+            if found is None:
+                continue
+            line.update(
+                match=found.face.family,
+                matchExact=False,
+                detected=round(found.score, 2),
+                bold=found.bold,
+                italic=found.italic,
+                serif=found.face.category == "serif",
+                mono=found.face.category == "mono",
+            )
     return result
 
 
