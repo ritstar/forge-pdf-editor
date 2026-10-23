@@ -19,7 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     shared-mime-info \
     fonts-dejavu-core \
     fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
+    tesseract-ocr-eng \
+    tesseract-ocr-hin \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s "$(dirname "$(find /usr/share/tesseract-ocr -name eng.traineddata | head -n 1)")" /usr/share/tessdata
+
+# PyMuPDF ships Tesseract itself and only needs the language data for OCR.
+ENV TESSDATA_PREFIX=/usr/share/tessdata
 
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt

@@ -13,6 +13,7 @@ import {
   Eraser,
   FileImage,
   ImagePlus,
+  Italic,
   Layers,
   Loader2,
   LogOut,
@@ -21,7 +22,9 @@ import {
   PanelLeft,
   Plus,
   Redo2,
+  RotateCcw,
   Save,
+  ScanText,
   Signature,
   SlidersHorizontal,
   Trash2,
@@ -33,6 +36,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { Document, Page } from 'react-pdf';
+import { PDFDocument } from '@cantoo/pdf-lib';
 import LazyPage from './ui/LazyPage';
 import Menu from './ui/Menu';
 import '../utils/pdfWorker';
@@ -41,6 +45,14 @@ import { removeWhiteBackground } from '../utils/imageProcessing';
 import { generatePdf } from '../utils/pdfGenerator';
 import { extractFormFieldsFromPdfBytes, getInitialsFromName } from '../utils/pdfForms';
 import { downloadBlob, downloadPdfBytes, stripExtension } from '../utils/files';
+import {
+  applyTextEdits,
+  createTextEdit,
+  fetchTextLayout,
+  isChangedTextEdit,
+  keepsOriginalStyle,
+  previewFontFamily,
+} from '../utils/textEditing';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const HISTORY_LIMIT = 60;
@@ -118,6 +130,10 @@ function hydrateElements(serialized = []) {
         };
       }
 
+      if (item.type === 'textEdit' && item.original) {
+        return { ...serializeTextEdit(item), id: item.id || makeId() };
+      }
+
       if (item.type === 'image') {
         return {
           id: item.id || makeId(),
@@ -143,8 +159,34 @@ function hydrateElements(serialized = []) {
     .filter(Boolean);
 }
 
+// Edits of text already in the PDF: the line's box is fixed, only its content and style change.
+function serializeTextEdit(item) {
+  return {
+    id: item.id,
+    type: 'textEdit',
+    pageIndex: item.pageIndex ?? 0,
+    lineId: item.lineId,
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+    text: item.text ?? '',
+    size: item.size,
+    color: item.color || '#000000',
+    bold: Boolean(item.bold),
+    italic: Boolean(item.italic),
+    family: item.family || 'sans',
+    pageWidth: item.pageWidth,
+    original: { ...item.original },
+  };
+}
+
 function serializeElements(elements = []) {
   return elements.map((item) => {
+    if (item.type === 'textEdit') {
+      return serializeTextEdit(item);
+    }
+
     if (item.type === 'text') {
       return {
         id: item.id,
@@ -222,8 +264,15 @@ export default function ForgeEditor({
     mobile: '',
   }));
 
+  // "Edit text" mode: detected lines per page index ({ status, lines, source, ... }).
+  const [textMode, setTextMode] = useState(false);
+  const [layouts, setLayouts] = useState({});
+  const [exportNotice, setExportNotice] = useState('');
+
   const imageInputRef = useRef(null);
   const signatureInputRef = useRef(null);
+  const layoutRequestsRef = useRef(new Set());
+  const sourceDocRef = useRef(null);
   const shellRef = useRef(null);
   const canvasRef = useRef(null);
   const interactionRef = useRef(null);
@@ -284,6 +333,47 @@ export default function ForgeEditor({
   const pageElements = useMemo(
     () => elements.filter((item) => item.pageIndex === currentPage - 1),
     [elements, currentPage],
+  );
+
+  const loadLayout = useCallback(
+    async (pageIndex) => {
+      if (!pdfFile || layoutRequestsRef.current.has(pageIndex)) return;
+      layoutRequestsRef.current.add(pageIndex);
+      setLayouts((prev) => ({ ...prev, [pageIndex]: { status: 'loading' } }));
+      try {
+        if (!sourceDocRef.current) {
+          sourceDocRef.current = pdfFile.arrayBuffer().then((bytes) => PDFDocument.load(bytes));
+        }
+        const sourceDoc = await sourceDocRef.current.catch((error) => {
+          sourceDocRef.current = null;
+          throw error;
+        });
+        const layout = await fetchTextLayout({
+          sourceDoc,
+          pageIndex,
+          onWaking: (seconds) => setLayouts((prev) => ({ ...prev, [pageIndex]: { status: 'loading', waking: seconds } })),
+        });
+        setLayouts((prev) => ({ ...prev, [pageIndex]: { ...layout, status: 'ready' } }));
+      } catch (error) {
+        // Allow a retry.
+        layoutRequestsRef.current.delete(pageIndex);
+        setLayouts((prev) => ({
+          ...prev,
+          [pageIndex]: { status: 'error', error: error.message || 'Could not read the text on this page.' },
+        }));
+      }
+    },
+    [pdfFile],
+  );
+
+  useEffect(() => {
+    if (textMode) loadLayout(currentPage - 1);
+  }, [currentPage, loadLayout, textMode]);
+
+  const pageLayout = layouts[currentPage - 1];
+  const editedLineIds = useMemo(
+    () => new Set(pageElements.filter((item) => item.type === 'textEdit').map((item) => item.lineId)),
+    [pageElements],
   );
 
   useEffect(() => {
@@ -405,7 +495,7 @@ export default function ForgeEditor({
 
       setElements(
         elementsRef.current.map((item) => {
-          if (item.id !== interaction.id) return item;
+          if (item.id !== interaction.id || item.type === 'textEdit') return item;
 
           if (interaction.mode === 'drag') {
             const nextX = clamp(interaction.startBox.x + dx, 0, 1 - item.width);
@@ -491,7 +581,8 @@ export default function ForgeEditor({
         setEditingId(null);
       }
 
-      if (!selectedId) return;
+      // Edited lines keep the original line's position.
+      if (!selectedId || elementsRef.current.find((item) => item.id === selectedId)?.type === 'textEdit') return;
 
       const step = event.shiftKey ? 0.01 : 0.003;
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
@@ -620,7 +711,7 @@ export default function ForgeEditor({
   const startInteraction = (event, id, mode, handle = null) => {
     if (!canvasRef.current) return;
     // Let clicks inside the inline editor place the caret instead of starting a drag.
-    if (event.target.closest?.('textarea')) {
+    if (event.target.closest?.('textarea, input')) {
       event.stopPropagation();
       return;
     }
@@ -632,7 +723,7 @@ export default function ForgeEditor({
     setEditingId(null);
 
     const target = elementsRef.current.find((item) => item.id === id);
-    if (!target) return;
+    if (!target || target.type === 'textEdit') return;
 
     interactionRef.current = {
       id,
@@ -755,6 +846,24 @@ export default function ForgeEditor({
     setEditingId(item.id);
   };
 
+  const startLineEdit = (line) => {
+    const pageIndex = currentPage - 1;
+    const item = createTextEdit({ id: makeId(), line, pageIndex, pageWidth: layouts[pageIndex]?.width || 612 });
+    applyChange((prev) => [...prev, item]);
+    setSelectedId(item.id);
+    setEditingId(item.id);
+  };
+
+  // Opening a line without changing it is not an edit, but it stays while selected so the
+  // inspector (color, size, font) can still change it after the inline input loses focus.
+  useEffect(() => {
+    const isStale = (item) =>
+      item.type === 'textEdit' && item.id !== selectedId && item.id !== editingId && !isChangedTextEdit(item);
+    if (elementsRef.current.some(isStale)) {
+      applyChange((prev) => prev.filter((item) => !isStale(item)), { track: false });
+    }
+  }, [applyChange, editingId, selectedId]);
+
   const addImage = async ({ file, isSignature = false, url, storagePath, assetBucket, mimeType, signatureId }) => {
     const item = createImageElement({
       pageIndex: currentPage - 1,
@@ -835,12 +944,25 @@ export default function ForgeEditor({
 
   const renderEditedPdf = async () => {
     const warnings = new Set();
-    const pdfBytes = await pdfFile.arrayBuffer();
+    const onWarning = (message) => warnings.add(message);
+    // Text already in the PDF is rewritten by the backend first; overlays go on top of that.
+    const textEdits = elements.filter((item) => item.type === 'textEdit' && isChangedTextEdit(item));
+    let pdfBytes;
+    if (textEdits.length) {
+      setExportNotice('Applying text edits…');
+      try {
+        pdfBytes = await applyTextEdits({ pdfFile, edits: textEdits, onWarning });
+      } finally {
+        setExportNotice('');
+      }
+    } else {
+      pdfBytes = await pdfFile.arrayBuffer();
+    }
     const modified = await generatePdf({
       pdfBytes,
-      elements,
+      elements: elements.filter((item) => item.type !== 'textEdit'),
       formValues,
-      onWarning: (message) => warnings.add(message),
+      onWarning,
     });
     setSaveError(warnings.size ? [...warnings].join(' ') : '');
     return modified;
@@ -930,6 +1052,15 @@ export default function ForgeEditor({
 
         <div className="editor-bar-center">
           <div className="tool-group" role="toolbar" aria-label="Insert">
+            <button
+              type="button"
+              className={`btn btn-ghost ${textMode ? 'is-active' : ''}`}
+              onClick={() => setTextMode((value) => !value)}
+              aria-pressed={textMode}
+              title="Edit text already in the PDF"
+            >
+              <ScanText size={16} /> <span className="hide-sm">Edit text</span>
+            </button>
             <button type="button" className="btn btn-ghost" onClick={addText} title="Add text">
               <Type size={16} /> <span className="hide-sm">Text</span>
             </button>
@@ -1127,8 +1258,91 @@ export default function ForgeEditor({
               />
 
               <div className="overlay">
+                {textMode && pageLayout?.status === 'ready'
+                  ? pageLayout.lines
+                    .filter((line) => !editedLineIds.has(line.id))
+                    .map((line) => (
+                      <button
+                        key={line.id}
+                        type="button"
+                        className="text-line"
+                        style={{
+                          left: `${line.x * 100}%`,
+                          top: `${line.y * 100}%`,
+                          width: `${line.width * 100}%`,
+                          height: `${line.height * 100}%`,
+                        }}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={() => startLineEdit(line)}
+                        aria-label={`Edit text: ${line.text}`}
+                        title="Click to edit"
+                      />
+                    ))
+                  : null}
+
                 {pageElements.map((item) => {
                   const isSelected = selectedId === item.id;
+                  if (item.type === 'textEdit') {
+                    const isEditing = editingId === item.id;
+                    const changed = isChangedTextEdit(item);
+                    const fontPx = (item.size / item.pageWidth) * renderSize.width;
+                    const textStyle = {
+                      left: (item.original.originX - item.x) * renderSize.width,
+                      // line-height 1 puts the baseline about 0.78em below the top for most fonts.
+                      top: (item.original.baseline - item.y) * renderSize.height - fontPx * 0.78,
+                      color: item.color,
+                      fontSize: `${fontPx}px`,
+                      fontWeight: item.bold ? 700 : 400,
+                      fontStyle: item.italic ? 'italic' : 'normal',
+                      fontFamily: previewFontFamily(item),
+                    };
+                    return (
+                      <div
+                        key={item.id}
+                        className={`item text-edit ${isSelected ? 'selected' : ''}`}
+                        style={{
+                          left: `${item.x * 100}%`,
+                          top: `${item.y * 100}%`,
+                          width: `${item.width * 100}%`,
+                          height: `${item.height * 100}%`,
+                          background: changed || isEditing ? item.original.background : 'transparent',
+                        }}
+                        onPointerDown={(event) => startInteraction(event, item.id, 'drag')}
+                        onDoubleClick={() => {
+                          setSelectedId(item.id);
+                          setEditingId(item.id);
+                        }}
+                      >
+                        {isEditing ? (
+                          <input
+                            autoFocus
+                            value={item.text}
+                            onChange={(event) => updateSelected({ text: event.target.value })}
+                            onBlur={() => setEditingId(null)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
+                            }}
+                            className="text-edit-input"
+                            style={textStyle}
+                            aria-label="Edit text"
+                          />
+                        ) : changed ? (
+                          <span className="text-edit-text" style={textStyle}>{item.text}</span>
+                        ) : null}
+
+                        {isSelected && !isEditing ? (
+                          <div className="item-toolbar" onPointerDown={(event) => event.stopPropagation()}>
+                            <button type="button" onClick={() => setEditingId(item.id)} aria-label="Edit text" title="Edit text">
+                              <Type size={14} />
+                            </button>
+                            <button type="button" onClick={removeSelected} aria-label="Revert to original" title="Revert to original">
+                              <RotateCcw size={14} />
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  }
                   return (
                     <div
                       key={item.id}
@@ -1211,6 +1425,44 @@ export default function ForgeEditor({
             </div>
           </div>
 
+          {exportNotice || textMode ? (
+            <div className="text-mode-status" role="status" onPointerDown={(event) => event.stopPropagation()}>
+              {exportNotice ? (
+                <>
+                  <Loader2 size={14} className="spin" /> {exportNotice}
+                </>
+              ) : !pageLayout || pageLayout.status === 'loading' ? (
+                <>
+                  <Loader2 size={14} className="spin" />
+                  {pageLayout?.waking
+                    ? `Starting the text engine… ${pageLayout.waking}s`
+                    : 'Finding text… scanned pages take a few seconds longer'}
+                </>
+              ) : pageLayout.status === 'error' ? (
+                <>
+                  <span>{pageLayout.error}</span>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadLayout(currentPage - 1)}>
+                    Retry
+                  </button>
+                </>
+              ) : pageLayout.ocrUnavailable ? (
+                <span>This page is a scan and text recognition isn&apos;t available right now.</span>
+              ) : !pageLayout.lines.length ? (
+                <span>No editable text found on this page.</span>
+              ) : (
+                <span>
+                  {pageLayout.source === 'ocr' ? 'Scanned page: text recognised with OCR. ' : ''}
+                  Click any line to edit it.
+                </span>
+              )}
+              {textMode && !exportNotice ? (
+                <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => setTextMode(false)} aria-label="Close edit text mode">
+                  <X size={14} />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
           {numPages > 1 ? (
             <div className="page-pager" onPointerDown={(event) => event.stopPropagation()}>
               <button type="button" className="btn btn-ghost btn-icon" onClick={() => goToPage(currentPage - 1)} disabled={currentPage <= 1} aria-label="Previous page">
@@ -1233,13 +1485,37 @@ export default function ForgeEditor({
             ) : null}
 
             <section className="panel-section">
-              <h3>{selectedElement ? (selectedElement.type === 'text' ? 'Text' : selectedElement.isSignature ? 'Signature' : 'Image') : 'Properties'}</h3>
+              <h3>
+                {selectedElement
+                  ? selectedElement.type === 'textEdit'
+                    ? 'Edited text'
+                    : selectedElement.type === 'text'
+                      ? 'Text'
+                      : selectedElement.isSignature
+                        ? 'Signature'
+                        : 'Image'
+                  : 'Properties'}
+              </h3>
               {!selectedElement ? (
                 <div className="panel-stack">
-                  <p className="small muted">Select an item on the page to edit it, or add something new.</p>
+                  <p className="small muted">Select an item on the page to edit it, or add something new. Use Edit text to change words already in the PDF.</p>
                   <div className="panel-row">
                     <button type="button" className="btn btn-secondary btn-sm" onClick={addText}><Plus size={14} /> Text</button>
                     <button type="button" className="btn btn-secondary btn-sm" onClick={() => imageInputRef.current?.click()} disabled={busy}><Plus size={14} /> Image</button>
+                  </div>
+                  {/* The toolbar is hidden on phones, so this is how small screens reach Edit text. */}
+                  <div className="panel-row">
+                    <button
+                      type="button"
+                      className={`btn btn-secondary btn-sm ${textMode ? 'is-active' : ''}`}
+                      onClick={() => {
+                        setTextMode((value) => !value);
+                        setRightOpen(false);
+                      }}
+                      aria-pressed={textMode}
+                    >
+                      <ScanText size={14} /> {textMode ? 'Stop editing text' : 'Edit text'}
+                    </button>
                   </div>
                   <p className="small muted">
                     Tip: <span className="kbd">⌘Z</span> undo · <span className="kbd">Del</span> remove · arrows nudge
@@ -1247,7 +1523,104 @@ export default function ForgeEditor({
                 </div>
               ) : (
                 <div className="panel-stack">
-                  {selectedElement.type === 'text' ? (
+                  {selectedElement.type === 'textEdit' ? (
+                    <>
+                      <div className="field">
+                        <label className="field-label" htmlFor="text-edit-field">Content</label>
+                        <input
+                          id="text-edit-field"
+                          className="input"
+                          value={selectedElement.text}
+                          onChange={(event) => updateSelected({ text: event.target.value })}
+                        />
+                        <span className="field-hint">Was: {selectedElement.original.text}</span>
+                      </div>
+                      <div className="field">
+                        <label className="field-label" htmlFor="text-edit-size">Size · {selectedElement.size.toFixed(1)} pt</label>
+                        <input
+                          id="text-edit-size"
+                          type="range"
+                          min={Math.max(4, Math.round(selectedElement.original.size * 0.5))}
+                          max={Math.round(selectedElement.original.size * 2)}
+                          step={0.5}
+                          value={selectedElement.size}
+                          onChange={(event) => updateSelected({ size: Number(event.target.value) })}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="field-label">Font</span>
+                        <div className="panel-row">
+                          <select
+                            className="select"
+                            value={selectedElement.family}
+                            onChange={(event) => updateSelected({ family: event.target.value })}
+                            aria-label="Font family"
+                          >
+                            <option value="sans">Sans serif</option>
+                            <option value="serif">Serif</option>
+                            <option value="mono">Monospace</option>
+                          </select>
+                          <button
+                            type="button"
+                            className={`btn btn-secondary btn-icon btn-sm ${selectedElement.bold ? 'is-active' : ''}`}
+                            onClick={() => updateSelected({ bold: !selectedElement.bold })}
+                            aria-pressed={selectedElement.bold}
+                            aria-label="Bold"
+                            style={{ flex: '0 0 auto' }}
+                          >
+                            <Bold size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            className={`btn btn-secondary btn-icon btn-sm ${selectedElement.italic ? 'is-active' : ''}`}
+                            onClick={() => updateSelected({ italic: !selectedElement.italic })}
+                            aria-pressed={selectedElement.italic}
+                            aria-label="Italic"
+                            style={{ flex: '0 0 auto' }}
+                          >
+                            <Italic size={15} />
+                          </button>
+                        </div>
+                        <span className="field-hint">
+                          {selectedElement.original.source === 'ocr'
+                            ? 'Recognised from a scan, so a similar font is used. Pick the closest style.'
+                            : !keepsOriginalStyle(selectedElement)
+                              ? 'Style changed, so a similar font will be used.'
+                              : selectedElement.original.font
+                                ? `Keeps ${selectedElement.original.font} when it has every character you type.`
+                                : 'A similar font will be used.'}
+                        </span>
+                      </div>
+                      <div className="field">
+                        <span className="field-label">Color</span>
+                        <div className="color-swatches">
+                          {[selectedElement.original.color, ...TEXT_COLORS.filter((hex) => hex !== selectedElement.original.color)].map((hex) => (
+                            <button
+                              key={hex}
+                              type="button"
+                              className="swatch"
+                              style={{ background: hex }}
+                              aria-label={hex === selectedElement.original.color ? 'Original color' : `Color ${hex}`}
+                              aria-pressed={selectedElement.color === hex}
+                              onClick={() => updateSelected({ color: hex })}
+                            />
+                          ))}
+                          <input
+                            type="color"
+                            value={selectedElement.color}
+                            onChange={(event) => updateSelected({ color: event.target.value })}
+                            className="color-input"
+                            aria-label="Custom color"
+                          />
+                        </div>
+                      </div>
+                      <div className="panel-row">
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={removeSelected}>
+                          <RotateCcw size={14} /> Revert to original
+                        </button>
+                      </div>
+                    </>
+                  ) : selectedElement.type === 'text' ? (
                     <>
                       <div className="field">
                         <label className="field-label" htmlFor="text-content-field">Content</label>
@@ -1312,10 +1685,12 @@ export default function ForgeEditor({
                   ) : (
                     <p className="small muted">Drag to move. Use the corner handles to resize.</p>
                   )}
-                  <div className="panel-row">
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={duplicateSelected}><Copy size={14} /> Duplicate</button>
-                    <button type="button" className="btn btn-danger-ghost btn-sm" onClick={removeSelected}><Trash2 size={14} /> Delete</button>
-                  </div>
+                  {selectedElement.type !== 'textEdit' ? (
+                    <div className="panel-row">
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={duplicateSelected}><Copy size={14} /> Duplicate</button>
+                      <button type="button" className="btn btn-danger-ghost btn-sm" onClick={removeSelected}><Trash2 size={14} /> Delete</button>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </section>
@@ -1448,8 +1823,16 @@ export default function ForgeEditor({
                       className={`layer-row ${item.id === selectedId ? 'active' : ''}`}
                       onClick={() => setSelectedId(item.id)}
                     >
-                      {item.type === 'text' ? <Type size={14} /> : item.isSignature ? <Signature size={14} /> : <ImagePlus size={14} />}
-                      <span>{item.type === 'text' ? item.text || 'Empty text' : item.isSignature ? 'Signature' : 'Image'}</span>
+                      {item.type === 'textEdit' ? <ScanText size={14} /> : item.type === 'text' ? <Type size={14} /> : item.isSignature ? <Signature size={14} /> : <ImagePlus size={14} />}
+                      <span>
+                        {item.type === 'textEdit'
+                          ? item.text || 'Removed text'
+                          : item.type === 'text'
+                            ? item.text || 'Empty text'
+                            : item.isSignature
+                              ? 'Signature'
+                              : 'Image'}
+                      </span>
                     </button>
                   ))}
                 </div>
