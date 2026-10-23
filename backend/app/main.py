@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from threading import BoundedSemaphore, Lock
+from threading import BoundedSemaphore, Lock, Thread
 from typing import Optional
 
 import pikepdf
@@ -34,11 +34,11 @@ from docx.shared import Pt
 from pptx import Presentation
 from pptx.util import Emu
 
-from . import text_edit
+from . import font_library, text_edit
 
 
 APP_TITLE = "Forge PDF Tools API"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 API_KEY_HEADER = "x-api-key"
 TOKEN_HEADER = "x-forge-token"
 API_KEY_ENV = "PDF_TOOLS_API_SECRET"
@@ -158,6 +158,9 @@ def _enforce_rate_limit(identity: str) -> None:
 
 
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
+
+# Index the installed fonts in the background so the first text edit doesn't wait for it.
+Thread(target=font_library.library, daemon=True).start()
 
 app.add_middleware(
     CORSMiddleware,

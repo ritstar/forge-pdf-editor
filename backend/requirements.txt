@@ -9,3 +9,4 @@ python-pptx==1.0.2
 openpyxl==3.1.5
 weasyprint==70.0
 numpy>=1.26
+fonttools>=4.50

@@ -66,10 +66,15 @@ export function createTextEdit({ id, line, pageIndex, pageWidth }) {
     bold: Boolean(line.bold),
     italic: Boolean(line.italic),
     family: familyOf(line),
+    // A family from the font picker; empty means the original font, or its closest match.
+    fontFamily: '',
     pageWidth,
     original: {
       text: line.text,
       font: line.font || '',
+      // The installed font used when the original can't draw the edit.
+      match: line.match || '',
+      matchExact: Boolean(line.matchExact),
       size: line.size,
       color: line.color,
       background: line.background || '#ffffff',
@@ -83,10 +88,33 @@ export function createTextEdit({ id, line, pageIndex, pageWidth }) {
   };
 }
 
-/** The original font can only be reused when the user kept its weight, slant and family. */
+/** The original font can only be reused when the user kept its weight, slant and font. */
 export function keepsOriginalStyle(edit) {
   const { original } = edit;
-  return edit.bold === original.bold && edit.italic === original.italic && edit.family === original.family;
+  return !edit.fontFamily && edit.bold === original.bold && edit.italic === original.italic && edit.family === original.family;
+}
+
+/** 'Arial-BoldMT' / 'Calibri,Bold' / 'Arial Regular' -> 'Arial' */
+export function fontDisplayName(font) {
+  return (font || '')
+    .split(/[-,]/)[0]
+    .replace(/(PS)?MT$/, '')
+    .replace(/\s+(Regular|Bold|Italic|Oblique)$/i, '')
+    .trim();
+}
+
+/** Picker families grouped for <optgroup>s, in display order. */
+export function groupFonts(fonts = []) {
+  const groups = [
+    ['sans', 'Sans serif'],
+    ['serif', 'Serif'],
+    ['mono', 'Monospace'],
+    ['devanagari', 'Hindi'],
+    ['display', 'Display & script'],
+  ];
+  return groups
+    .map(([category, label]) => ({ label, fonts: fonts.filter((font) => font.category === category) }))
+    .filter((group) => group.fonts.length);
 }
 
 export function isChangedTextEdit(edit) {
@@ -101,13 +129,15 @@ export function isChangedTextEdit(edit) {
 
 const GENERIC_FAMILY = { sans: 'Helvetica, Arial, sans-serif', serif: '"Times New Roman", Times, serif', mono: '"Courier New", Courier, monospace' };
 
-/** CSS stack for previews: the PDF's font if this device has it, else the same kind of font. */
+/** CSS stack for previews: the font that will be used if this device has it, else the same kind. */
 export function previewFontFamily(edit) {
   const generic = GENERIC_FAMILY[edit.family] || GENERIC_FAMILY.sans;
-  const font = keepsOriginalStyle(edit) ? edit.original.font.replace(/["\\]/g, '') : '';
-  if (!font) return generic;
-  const base = font.split(/[-,]/)[0].replace(/(MT|PS)$/, '').trim();
-  return `"${font}", "${base}", ${generic}`;
+  const clean = (name) => (name || '').replace(/["\\]/g, '');
+  const names = edit.fontFamily
+    ? [clean(edit.fontFamily)]
+    : [clean(edit.original.font), fontDisplayName(clean(edit.original.font)), clean(edit.original.match)];
+  const stack = [...new Set(names.filter(Boolean))].map((name) => `"${name}"`);
+  return [...stack, generic].join(', ');
 }
 
 function toBackendEdit(edit) {
@@ -122,7 +152,10 @@ function toBackendEdit(edit) {
     originX: original.originX,
     baseline: original.baseline,
     size: edit.size,
-    font: keepsOriginalStyle(edit) ? original.font : '',
+    // Always sent: even when the original can't be reused, it picks the matching family.
+    font: original.font,
+    reuseOriginal: keepsOriginalStyle(edit),
+    fontFamily: edit.fontFamily || '',
     color: edit.color,
     background: original.background,
     source: original.source,

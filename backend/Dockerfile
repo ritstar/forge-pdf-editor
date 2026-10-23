@@ -19,6 +19,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     shared-mime-info \
     fonts-dejavu-core \
     fonts-liberation \
+    # Font library for text edits (app/font_library.py): look-alikes of Arial, Times, Courier
+    # (croscore), Calibri (carlito), Cambria (caladea), the classic PostScript fonts (urw-base35),
+    # Noto incl. Devanagari, and popular open families.
+    fonts-croscore \
+    fonts-crosextra-carlito \
+    fonts-crosextra-caladea \
+    fonts-urw-base35 \
+    fonts-noto-core \
+    fonts-noto-mono \
+    fonts-roboto-unhinted \
+    fonts-open-sans \
+    fonts-lato \
+    fonts-ebgaramond \
+    fonts-adobe-sourcesans3 \
     tesseract-ocr-eng \
     tesseract-ocr-hin \
     && rm -rf /var/lib/apt/lists/* \

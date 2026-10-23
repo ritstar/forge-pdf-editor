@@ -49,6 +49,8 @@ import {
   applyTextEdits,
   createTextEdit,
   fetchTextLayout,
+  fontDisplayName,
+  groupFonts,
   isChangedTextEdit,
   keepsOriginalStyle,
   previewFontFamily,
@@ -176,6 +178,7 @@ function serializeTextEdit(item) {
     bold: Boolean(item.bold),
     italic: Boolean(item.italic),
     family: item.family || 'sans',
+    fontFamily: item.fontFamily || '',
     pageWidth: item.pageWidth,
     original: { ...item.original },
   };
@@ -371,6 +374,8 @@ export default function ForgeEditor({
   }, [currentPage, loadLayout, textMode]);
 
   const pageLayout = layouts[currentPage - 1];
+  // Every layout response lists the same installed fonts; any loaded page will do.
+  const fontGroups = useMemo(() => groupFonts(Object.values(layouts).find((layout) => layout?.fonts)?.fonts), [layouts]);
   const editedLineIds = useMemo(
     () => new Set(pageElements.filter((item) => item.type === 'textEdit').map((item) => item.lineId)),
     [pageElements],
@@ -1552,13 +1557,37 @@ export default function ForgeEditor({
                         <div className="panel-row">
                           <select
                             className="select"
-                            value={selectedElement.family}
-                            onChange={(event) => updateSelected({ family: event.target.value })}
-                            aria-label="Font family"
+                            value={selectedElement.fontFamily || ''}
+                            onChange={(event) => {
+                              const name = event.target.value;
+                              const category = fontGroups.flatMap((group) => group.fonts).find((font) => font.name === name)?.category;
+                              updateSelected({
+                                fontFamily: name,
+                                // Picking "Original" restores its kind; a library font sets its own.
+                                family: !name
+                                  ? selectedElement.original.family
+                                  : ['sans', 'serif', 'mono'].includes(category)
+                                    ? category
+                                    : selectedElement.family,
+                              });
+                            }}
+                            aria-label="Font"
                           >
-                            <option value="sans">Sans serif</option>
-                            <option value="serif">Serif</option>
-                            <option value="mono">Monospace</option>
+                            <option value="">
+                              {selectedElement.original.font
+                                ? `Original (${fontDisplayName(selectedElement.original.font)})`
+                                : `Automatic${selectedElement.original.match ? ` (${selectedElement.original.match})` : ''}`}
+                            </option>
+                            {fontGroups.map((group) => (
+                              <optgroup key={group.label} label={group.label}>
+                                {group.fonts.map((font) => (
+                                  <option key={font.name} value={font.name}>{font.name}</option>
+                                ))}
+                              </optgroup>
+                            ))}
+                            {selectedElement.fontFamily && !fontGroups.some((group) => group.fonts.some((font) => font.name === selectedElement.fontFamily)) ? (
+                              <option value={selectedElement.fontFamily}>{selectedElement.fontFamily}</option>
+                            ) : null}
                           </select>
                           <button
                             type="button"
@@ -1582,13 +1611,25 @@ export default function ForgeEditor({
                           </button>
                         </div>
                         <span className="field-hint">
-                          {selectedElement.original.source === 'ocr'
-                            ? 'Recognised from a scan, so a similar font is used. Pick the closest style.'
-                            : !keepsOriginalStyle(selectedElement)
-                              ? 'Style changed, so a similar font will be used.'
-                              : selectedElement.original.font
-                                ? `Keeps ${selectedElement.original.font} when it has every character you type.`
-                                : 'A similar font will be used.'}
+                          {(() => {
+                            const { original } = selectedElement;
+                            const name = fontDisplayName(original.font);
+                            const fallback = original.match
+                              ? original.matchExact
+                                ? `another copy of ${original.match}`
+                                : `${original.match}, a close match`
+                              : 'a similar font';
+                            if (selectedElement.fontFamily) return `Drawn in ${selectedElement.fontFamily}.`;
+                            if (original.source === 'ocr') {
+                              return `Recognised from a scan, so ${original.match || 'a similar font'} is used. Pick another font if it looks different.`;
+                            }
+                            if (!keepsOriginalStyle(selectedElement)) {
+                              return `Style changed, so ${original.match && !original.matchExact ? `${original.match} (like ${name})` : name || 'a similar font'} will be used in that style.`;
+                            }
+                            return name
+                              ? `Keeps ${name} when it has every character you type; otherwise ${fallback}.`
+                              : `${original.match || 'A similar font'} will be used.`;
+                          })()}
                         </span>
                       </div>
                       <div className="field">
