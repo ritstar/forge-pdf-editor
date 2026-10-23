@@ -1,12 +1,16 @@
 import { handleUpload } from '@vercel/blob/client';
 import { NextResponse } from 'next/server';
 import { getClientIp, takeRateLimitToken } from '@/lib/server/rate-limit';
+import { rejectForgedRequest } from '@/lib/server/request-guard';
 import { verifyUserSession } from '@/lib/server/session';
 import { getUploadConstraints, validateBlobPath } from '@/lib/server/blob-security';
 
 // Issues short-lived client upload tokens. The browser then uploads straight to Vercel Blob,
 // which avoids the 4.5 MB serverless request body limit and a second copy through this function.
 export async function POST(request) {
+  const forged = rejectForgedRequest(request, { json: true });
+  if (forged) return forged;
+
   const rateLimit = takeRateLimitToken({
     bucket: 'blob-upload',
     key: getClientIp(request),

@@ -2,11 +2,15 @@ import { del } from '@vercel/blob';
 import { NextResponse } from 'next/server';
 import { isBlobOwnedBy } from '@/lib/server/blob-security';
 import { getClientIp, takeRateLimitToken } from '@/lib/server/rate-limit';
+import { rejectForgedRequest } from '@/lib/server/request-guard';
 import { verifyUserSession } from '@/lib/server/session';
 
 const MAX_URLS_PER_REQUEST = 50;
 
 export async function POST(request) {
+  const forged = rejectForgedRequest(request, { json: true });
+  if (forged) return forged;
+
   try {
     const rateLimit = takeRateLimitToken({
       bucket: 'blob-delete',
