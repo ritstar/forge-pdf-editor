@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getClientIp, takeRateLimitToken } from '@/lib/server/rate-limit';
+import { rejectForgedRequest } from '@/lib/server/request-guard';
 import { verifyUserSession } from '@/lib/server/session';
 import { backendApiSecret, backendUrl, publicBackendUrl } from '@/lib/server/pdfTools';
 
@@ -78,6 +79,10 @@ export async function GET(request, { params }) {
 
 // Fallback path: proxies the request through this function (subject to platform body limits).
 export async function POST(request, { params }) {
+  // Multipart bodies can come from a plain HTML form, so only the origin check applies.
+  const forged = rejectForgedRequest(request);
+  if (forged) return forged;
+
   const ctx = await guard(request, params, 'pdf-tools-proxy', 20);
   if (ctx.error) return ctx.error;
 

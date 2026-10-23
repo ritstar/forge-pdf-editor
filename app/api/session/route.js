@@ -1,11 +1,16 @@
 import { NextResponse } from 'next/server';
 import { getAdminAuth } from '@/lib/firebase/admin';
 import { getClientIp, takeRateLimitToken } from '@/lib/server/rate-limit';
+import { rejectForgedRequest } from '@/lib/server/request-guard';
 
 const SESSION_COOKIE_NAME = '__session';
 const EXPIRES_IN = 60 * 60 * 24 * 5 * 1000; // 5 days
 
 export async function POST(request) {
+    // Otherwise another site could sign a visitor into the attacker's account (login CSRF).
+    const forged = rejectForgedRequest(request, { json: true });
+    if (forged) return forged;
+
     try {
         const rateLimit = takeRateLimitToken({
             bucket: 'session-create',
@@ -42,7 +47,10 @@ export async function POST(request) {
     }
 }
 
-export async function DELETE() {
+export async function DELETE(request) {
+    const forged = rejectForgedRequest(request);
+    if (forged) return forged;
+
     const response = NextResponse.json({ status: 'ok' });
     response.cookies.set(SESSION_COOKIE_NAME, '', {
         maxAge: 0,

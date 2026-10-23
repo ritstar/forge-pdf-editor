@@ -32,8 +32,11 @@ logger = logging.getLogger(__name__)
 FONT_DIR = Path(__file__).with_name("fonts")
 OCR_LANGUAGES = os.getenv("OCR_LANGUAGES", "eng+hin")
 OCR_DPI = int(os.getenv("OCR_DPI", "300"))
-MAX_EDITS = 2000
+# Each edit subsets a font, so these bound the work one request can cause; real documents
+# need a few dozen edits.
+MAX_EDITS = 300
 MAX_EDIT_CHARS = 2000
+MAX_TOTAL_EDIT_CHARS = 20000
 # Pages are rendered at this zoom to sample text and background colors.
 SAMPLE_ZOOM = 2
 SAMPLE_MAX_PIXELS = 4000
@@ -471,6 +474,8 @@ def clean_edits(raw: object, page_count: int) -> list[dict]:
         raise ValueError("Edits must be a list.")
     if len(raw) > MAX_EDITS:
         raise ValueError("Too many text edits.")
+    if sum(len(item.get("text", "")) for item in raw if isinstance(item, dict) and isinstance(item.get("text"), str)) > MAX_TOTAL_EDIT_CHARS:
+        raise ValueError("Too much edited text.")
 
     def num(value, lo, hi):
         number = float(value)
