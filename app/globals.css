@@ -1830,11 +1830,14 @@ input[type='radio'] {
 
 .doc-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px 90px auto;
 }
 
+/* Rows share the list's columns so the header lines up with the action buttons' width. */
 .doc-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 140px 90px auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
   gap: 16px;
   padding: 12px 20px;
@@ -3489,7 +3492,7 @@ input[type='radio'] {
     padding: 32px 28px;
   }
 
-  .doc-row {
+  .doc-list {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
