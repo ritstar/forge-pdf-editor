@@ -29,7 +29,7 @@ Edit, sign, convert, compress and organize PDFs — right in your browser.
 
 - **21 tools, one workspace** — organize, optimize, convert, edit & sign, and secure PDFs.
 - **Private by default** — merge, split, organize, rotate, watermark, page numbers and image conversion run **entirely in your browser**. Those files never leave your device.
-- **A real editor** — text, images and reusable signatures, PDF form filling, undo/redo, autosaved drafts, page thumbnails, touch support.
+- **A real editor** — rewrite the text already in a PDF (scans too, via OCR) in a matching font, add text, images and reusable signatures, fill PDF forms, undo/redo, autosaved drafts, page thumbnails, touch support.
 - **Speaks every script** — exports embed subset Noto fonts on demand, so `₹`, `Привет`, `café` and `नमस्ते` come out as real, searchable text.
 - **Pro-grade engines** — Ghostscript compression that never makes files bigger, layout-preserving PDF → Word (pdf2docx), table extraction to Excel, LibreOffice Office conversion, AES-256 encryption.
 - **Polished UI** — a cohesive design system with light & dark themes, responsive down to phones.
@@ -118,7 +118,7 @@ flowchart LR
     BLOB[("Vercel Blob<br/>PDFs & signatures")]
 
     subgraph Render["☁️ Render (Docker)"]
-        BE["FastAPI<br/>LibreOffice · Ghostscript<br/>pikepdf · PyMuPDF · pdf2docx<br/>WeasyPrint"]
+        BE["FastAPI<br/>LibreOffice · Ghostscript<br/>pikepdf · PyMuPDF · pdf2docx<br/>WeasyPrint · Tesseract · fontTools"]
     end
 
     UI --> LOCAL
@@ -264,6 +264,10 @@ docker compose up --build pdf-tools-api
 | `SUBPROCESS_TIMEOUT_SECONDS` | `100` | Timeout for LibreOffice / Ghostscript |
 | `MAX_CONCURRENT_CONVERSIONS` | `2` | Heavy jobs allowed in parallel |
 | `PDF2DOCX_MAX_PAGES` | `150` | Longer documents use the fast text-based Word conversion |
+| `OCR_LANGUAGES` | `eng+hin` | Tesseract languages for reading scanned pages in Edit text |
+| `OCR_DPI` | `300` | Resolution scanned pages are read at |
+| `TESSDATA_PREFIX` | set in the image | Folder with Tesseract language data; without it, scanned pages can't be edited |
+| `FONT_DIRS` | bundled + system font folders | Folders (`:`-separated) indexed for the text-edit font library and picker |
 
 ---
 
@@ -301,7 +305,11 @@ app/
 └── utils/                  PDF generation, fonts, coordinates, hooks
 backend/
 ├── app/main.py             FastAPI conversion service
-├── Dockerfile              LibreOffice, Ghostscript, fonts
+├── app/text_edit.py        Edit text: finds lines (OCR for scans), rewrites them in place
+├── app/font_library.py     Installed fonts, PDF font name matching, subset embedding
+├── app/font_detect.py      Typeface detection on scans from word shapes
+├── app/fonts/              Bundled Noto fonts (OFL), the fallback of last resort
+├── Dockerfile              LibreOffice, Ghostscript, Tesseract, the font library
 └── requirements.txt
 lib/                        Firebase, server helpers, tool catalog
 public/fonts/               Noto fonts (OFL) for Unicode exports
@@ -326,6 +334,8 @@ npm run lint     # ESLint
 
 - Built by [**RitstaR**](https://github.com/ritstar)
 - Fonts: [Noto Sans](https://github.com/notofonts/latin-greek-cyrillic) and [Noto Sans Devanagari](https://github.com/notofonts/devanagari) — SIL Open Font License ([`public/fonts/OFL.txt`](public/fonts/OFL.txt))
+- Text-edit font library (installed from Debian in the backend image, each under its own license): Arimo, Tinos and Cousine (Croscore), Carlito, Caladea, the URW base35 fonts, Noto, Roboto, Open Sans, Lato, EB Garamond, Source Sans 3, Liberation and DejaVu
+- [Tesseract](https://github.com/tesseract-ocr/tesseract) for OCR and [fontTools](https://github.com/fonttools/fonttools) for font matching and subsetting
 - Standing on the shoulders of [pdf.js](https://github.com/mozilla/pdf.js), [pdf-lib](https://github.com/Hopding/pdf-lib) & [Cantoo's fork](https://github.com/cantoo-scribe/pdf-lib), [qpdf / pikepdf](https://github.com/pikepdf/pikepdf), [PyMuPDF](https://github.com/pymupdf/PyMuPDF), [pdf2docx](https://github.com/ArtifexSoftware/pdf2docx), [Ghostscript](https://www.ghostscript.com/), [LibreOffice](https://www.libreoffice.org/) and [WeasyPrint](https://weasyprint.org/)
 
 <div align="center">

@@ -20,7 +20,11 @@ export function formatFileSize(bytes) {
 // Revoking the object URL synchronously after click() cancels the download in some browsers
 // (Firefox/Safari), so give the download a moment to start first.
 export function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
+  // With its real type (a PDF, an image), Safari and some mobile browsers ignore `download` and
+  // open the file in their viewer, leaving the user on a blob: page. Labelled as a generic
+  // file it is saved under `filename`, whose extension still tells the OS what it is.
+  const file = blob.type === 'application/octet-stream' ? blob : new Blob([blob], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(file);
   const link = document.createElement('a');
   link.href = url;
   link.download = filename;
