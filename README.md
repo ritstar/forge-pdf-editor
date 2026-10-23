@@ -80,7 +80,7 @@ Edit, sign, convert, compress and organize PDFs — right in your browser.
 ### The editor
 
 - Full-screen workspace: command bar, page thumbnails, canvas, and a properties inspector
-- **Edit existing text** in place, keeping the original font when it contains every character typed (even subset fonts); otherwise the closest match. Scanned pages are read with OCR (English + Hindi) and painted over in the sampled paper color ☁️
+- **Edit existing text** in place, keeping the original font when it contains every character typed (even subset fonts); otherwise the same family from the server's font library or a metric-compatible look-alike (Arial → Arimo, Calibri → Carlito, …). Any installed font can be picked instead. On scans the typeface (and bold/italic) is detected by comparing the recognised words' shapes with the installed fonts. Scanned pages are read with OCR (English + Hindi) and painted over in the sampled paper color ☁️
 - Text with size, color and bold; images; **saved signatures** with automatic white-background removal
 - **Fill & sign** — detects interactive form fields (text, checkbox, radio, dropdown); quick-fill name, email, address, phone, date and initials when a PDF has none
 - Floating item toolbar, layers panel, keyboard shortcuts (<kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd>, <kbd>⌘S</kbd>, <kbd>Del</kbd>, arrow-key nudge)

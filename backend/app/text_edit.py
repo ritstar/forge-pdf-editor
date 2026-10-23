@@ -3,8 +3,11 @@
 New text is drawn with the closest font available, best first:
 1. The page's own font. Its ToUnicode map is reversed and glyph codes are written directly,
    so this works with subset fonts as long as every character occurs somewhere in the subset.
-2. The closest Base-14 font (Helvetica / Times / Courier, same weight and slant) for Latin text.
-3. Bundled Noto fonts through MuPDF's HTML engine, which shapes complex scripts like Devanagari.
+2. An installed font (see font_library): the same family, a metric-compatible look-alike, or
+   the closest generic family; or the family the user picked. Embedded as a subset. Complex
+   scripts like Devanagari go through MuPDF's HTML engine, which shapes them.
+3. The closest Base-14 font (Helvetica / Times / Courier), or the bundled Noto fonts, when no
+   installed font has every character.
 
 All coordinates exchanged with the editor are "visual": what the user sees, origin at the
 top-left of the displayed (rotated, cropped) page, normalized to 0..1 of its width/height.
@@ -21,6 +24,8 @@ from typing import Optional
 
 import numpy as np
 import pymupdf
+
+from . import font_detect, font_library
 
 logger = logging.getLogger(__name__)
 
@@ -201,8 +206,11 @@ def analyze_page(doc: pymupdf.Document, page_number: int = 0) -> dict:
         source = "ocr"
     result["source"] = source
 
+    fonts = font_library.library()
+    result["fonts"] = fonts.picker()
     rotate = page.rotation_matrix
     sampler = _ColorSampler(page)
+    words: list[list[tuple[str, pymupdf.Rect]]] = []  # per line, for font detection on scans
     for block in raw["blocks"]:
         for line_no, line in enumerate(block.get("lines", ())):
             spans = [s for s in line["spans"] if s["text"]]
@@ -238,9 +246,13 @@ def analyze_page(doc: pymupdf.Document, page_number: int = 0) -> dict:
                     # Type3 fonts have no usable name (MuPDF reports "Type3 (12 0 R)").
                     font = "" if main["font"].startswith("Type3") else _font_key(main["font"])
 
+                # The installed font used when the PDF's own copy can't draw an edit.
+                match = fonts.match(font, text=text, family="", **style)
                 result["lines"].append(
                     {
                         "id": f"{block['number']}-{line_no}-{run_no}",
+                        "match": match.face.family if match else "",
+                        "matchExact": bool(match and match.exact),
                         "text": text,
                         "x": box.x0 / width,
                         "y": box.y0 / height,
@@ -256,6 +268,27 @@ def analyze_page(doc: pymupdf.Document, page_number: int = 0) -> dict:
                         **style,
                     }
                 )
+                words.append([(s["text"], pymupdf.Rect(s["bbox"]) * rotate) for s in run])
+
+    if source == "ocr" and result["lines"]:
+        # Scans carry no font names: compare the words' shapes with the installed fonts.
+        try:
+            detections = font_detect.detect(page, words, fonts)
+        except Exception:
+            logger.exception("Font detection failed")
+            detections = []
+        for line, found in zip(result["lines"], detections):
+            if found is None:
+                continue
+            line.update(
+                match=found.face.family,
+                matchExact=False,
+                detected=round(found.score, 2),
+                bold=found.bold,
+                italic=found.italic,
+                serif=found.face.category == "serif",
+                mono=found.face.category == "mono",
+            )
     return result
 
 
@@ -465,6 +498,10 @@ def clean_edits(raw: object, page_count: int) -> list[dict]:
                 "baseline": num(item.get("baseline", 0), 0, 1),
                 "size": num(item.get("size", 12), 2, 300),
                 "font": str(item.get("font", ""))[:128],
+                # False once the user changed weight, slant or font: the original can't draw that.
+                "reuseOriginal": item.get("reuseOriginal", True) is not False,
+                # A family from the font picker; empty means match the original automatically.
+                "fontFamily": str(item.get("fontFamily", ""))[:128],
                 "color": str(item.get("color", "#000000"))[:7],
                 "background": str(item.get("background", "#ffffff"))[:7],
                 "source": "ocr" if item.get("source") == "ocr" else "pdf",
@@ -489,7 +526,8 @@ def apply_edits(doc: pymupdf.Document, edits: list[dict]) -> list[str]:
         for edit in items:
             parts = encoder = None
             text = edit["text"]
-            if edit["source"] == "pdf" and edit["font"] and text.strip() and not COMPLEX_SCRIPT.search(text):
+            reuse = edit["reuseOriginal"] and not edit["fontFamily"]
+            if reuse and edit["source"] == "pdf" and edit["font"] and text.strip() and not COMPLEX_SCRIPT.search(text):
                 if edit["font"] not in encoders:
                     encoders[edit["font"]] = _encoders_for(doc, page_number, edit["font"])
                 for candidate in encoders[edit["font"]]:
@@ -538,13 +576,40 @@ def apply_edits(doc: pymupdf.Document, edits: list[dict]) -> list[str]:
                 text=pymupdf.PDF_REDACT_TEXT_REMOVE,
             )
 
-        for p in prepared:
+        fonts = font_library.library()
+        for n, p in enumerate(prepared):
             if not p["text"].strip():
                 continue
             if _draw_with_original_font(doc, page, p, to_pdf, unrotate):
                 continue
-            if p["source"] == "pdf" and p["font"]:
-                warnings.add("Some edited text uses characters the original font doesn't contain, so a similar font was used.")
+            match = fonts.match(
+                p["font"],
+                text=p["text"],
+                bold=p["bold"],
+                italic=p["italic"],
+                serif=p["serif"],
+                mono=p["mono"],
+                family=p["fontFamily"],
+            )
+            # "ABCDEF+Arial-BoldMT" / "Arial Regular" -> "Arial", for the warning.
+            original = font_library.pdf_family_key(p["font"]) and re.sub(
+                r"\s+(Regular|Bold|Italic|Oblique|Bold Italic)$", "", re.split(r"[-,]", p["font"].split("+")[-1])[0]
+            )
+            missed = p["source"] == "pdf" and original and p["reuseOriginal"] and not p["fontFamily"]
+            if match and missed:
+                warnings.add(
+                    f"{original} doesn't have every character you typed, so "
+                    + (f"another copy of {match.face.family} was used." if match.exact else f"{match.face.family}, a close match, was used.")
+                )
+            elif missed or (p["fontFamily"] and not match):
+                warnings.add("Some edited text uses characters the chosen font doesn't contain, so a similar font was used.")
+
+            if match:
+                try:
+                    _draw_library_font(page, p, match.face, n, unrotate)
+                    continue
+                except Exception:
+                    logger.exception("Could not draw with %s; using a built-in font", match.face.path)
             if all(ord(ch) < 256 for ch in p["text"]):
                 _draw_base14(page, p, unrotate)
             else:
@@ -598,21 +663,71 @@ def _draw_base14(page, p, unrotate) -> None:
     )
 
 
-def _draw_html(page, p, unrotate) -> None:
-    family = "dv" if DEVANAGARI.search(p["text"]) else "sans"
-    css = (
-        "@font-face{font-family:sans;src:url(NotoSans-Regular.ttf)}"
-        "@font-face{font-family:sans;font-weight:bold;src:url(NotoSans-Bold.ttf)}"
-        "@font-face{font-family:dv;src:url(NotoSansDevanagari-Regular.ttf)}"
-        "@font-face{font-family:dv;font-weight:bold;src:url(NotoSansDevanagari-Bold.ttf)}"
+def _draw_library_font(page, p, face: font_library.Face, n: int, unrotate) -> None:
+    """Draws the edit with an installed font, embedding only the glyphs it needs."""
+    program = face.program(p["text"], p["bold"])
+    # Weight or slant the family doesn't have is simulated, like word processors do.
+    fake_bold = p["bold"] and not face.bold and not face.weight_axis
+    fake_italic = p["italic"] and not face.italic
+
+    if COMPLEX_SCRIPT.search(p["text"]):
+        name = f"lib{n}.ttf"
+        archive = pymupdf.Archive()
+        archive.add(program, name)
+        metrics = pymupdf.Font(fontbuffer=program)
+        ascent, descent = metrics.ascender, -metrics.descender
+        _draw_html(
+            page,
+            p,
+            unrotate,
+            css_font=f"@font-face{{font-family:lib;src:url({name})}}",
+            family="lib",
+            archive=archive,
+            ascent=ascent,
+            height=ascent + descent,
+            weight="bold" if fake_bold or (p["bold"] and face.bold) else "normal",
+        )
+        return
+
+    fontname = f"FE{n}x{page.number}"
+    page.insert_font(fontname=fontname, fontbuffer=program)
+    origin = p["origin"] * unrotate
+    color = _rgb(p["color"])
+    page.insert_text(
+        origin,
+        p["text"],
+        fontname=fontname,
+        fontsize=p["size"],
+        color=color,
+        fill=color,
+        render_mode=2 if fake_bold else 0,
+        border_width=0.03 if fake_bold else 0.05,
+        rotate=page.rotation,
+        # Shear around the baseline: the top of each glyph leans right.
+        morph=(origin, pymupdf.Matrix(1, 0, 0.2, 1, 0, 0)) if fake_italic else None,
+    )
+
+
+def _draw_html(page, p, unrotate, *, css_font=None, family=None, archive=None, ascent=NOTO_ASCENT, height=1.362, weight=None) -> None:
+    """Draws through MuPDF's HTML engine, which shapes complex scripts. Defaults to bundled Noto."""
+    if css_font is None:
+        family = "dv" if DEVANAGARI.search(p["text"]) else "sans"
+        css_font = (
+            "@font-face{font-family:sans;src:url(NotoSans-Regular.ttf)}"
+            "@font-face{font-family:sans;font-weight:bold;src:url(NotoSans-Bold.ttf)}"
+            "@font-face{font-family:dv;src:url(NotoSansDevanagari-Regular.ttf)}"
+            "@font-face{font-family:dv;font-weight:bold;src:url(NotoSansDevanagari-Bold.ttf)}"
+        )
+        archive = pymupdf.Archive(str(FONT_DIR))
+    css = css_font + (
         f"p{{margin:0;white-space:pre;line-height:1.4;font-family:{family};font-size:{p['size']:.2f}px;"
         f"color:{p['color'] if re.fullmatch(r'#[0-9a-fA-F]{6}', p['color']) else '#000000'};"
-        f"font-weight:{'bold' if p['bold'] else 'normal'};font-style:{'italic' if p['italic'] else 'normal'}}}"
+        f"font-weight:{weight or ('bold' if p['bold'] else 'normal')};font-style:{'italic' if p['italic'] else 'normal'}}}"
     )
     # The box's top sits one ascent (plus half the extra line height) above the baseline.
     size = p["size"]
-    top = p["origin"].y - size * (NOTO_ASCENT + (1.4 - 1.362) / 2)
+    top = p["origin"].y - size * (ascent + (1.4 - height) / 2)
     # MuPDF's HTML layout starts one unit in from the box edge.
     visual = pymupdf.Rect(p["origin"].x - 1, top, page.rect.width, top + size * 1.4 + 2)
     html = "<p>" + (p["text"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")) + "</p>"
-    page.insert_htmlbox(visual * unrotate, html, css=css, archive=pymupdf.Archive(str(FONT_DIR)), rotate=page.rotation)
+    page.insert_htmlbox(visual * unrotate, html, css=css, archive=archive, rotate=page.rotation)
