@@ -3133,6 +3133,75 @@ input[type='radio'] {
   background: rgba(127, 127, 127, 0.3);
 }
 
+/* Edit text mode: detected lines of the PDF, and lines the user has rewritten. */
+.text-line {
+  position: absolute;
+  pointer-events: auto;
+  padding: 0;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  cursor: text;
+}
+
+.text-line:hover,
+.text-line:focus-visible {
+  border-style: solid;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: none;
+}
+
+.item.text-edit {
+  cursor: text;
+  border-radius: 1px;
+}
+
+.text-edit-text,
+.text-edit-input {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  line-height: 1;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.text-edit-input {
+  min-width: 100%;
+  field-sizing: content;
+  background: transparent;
+  outline: none;
+  pointer-events: auto;
+  caret-color: var(--accent);
+}
+
+.text-mode-status {
+  position: absolute;
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 6px 6px 6px 14px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+.text-mode-status .btn {
+  --btn-h: 26px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
 .layer-list {
   display: grid;
   gap: 4px;

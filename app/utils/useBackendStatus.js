@@ -36,6 +36,22 @@ export function warmBackend() {
 }
 
 /**
+ * Resolves once the backend answers ('ready'), or with 'unavailable' after giving up. For
+ * actions outside a component that shows status; onWaking fires while it boots.
+ */
+export async function waitForBackend({ onWaking } = {}) {
+  if (Date.now() - lastReadyAt < FRESH_MS) return 'ready';
+  const started = Date.now();
+  for (;;) {
+    const result = await ping();
+    if (result === 'ready' || result === 'unknown') return result;
+    if (Date.now() - started > GIVE_UP_MS) return 'unavailable';
+    onWaking?.(Math.round((Date.now() - started) / 1000));
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  }
+}
+
+/**
  * Tracks whether the conversion backend is awake, polling while it boots.
  * status: 'ready' | 'checking' | 'waking' | 'unavailable' | 'unknown'
  */

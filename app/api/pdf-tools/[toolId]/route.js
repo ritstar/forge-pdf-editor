@@ -24,6 +24,8 @@ const ALLOWED_TOOL_IDS = new Set([
   'protect-pdf',
   'pdf-to-pdfa',
   'repair-pdf',
+  'text-layout',
+  'edit-text',
 ]);
 
 // Must match _verify_tool_token in backend/app/main.py.
@@ -114,6 +116,10 @@ export async function POST(request, { params }) {
     const contentDisposition = upstream.headers.get('content-disposition');
     if (contentDisposition) {
       headers.set('content-disposition', contentDisposition);
+    }
+    const warnings = upstream.headers.get('x-forge-warnings');
+    if (warnings) {
+      headers.set('x-forge-warnings', warnings);
     }
 
     return new NextResponse(upstream.body, { status: 200, headers });

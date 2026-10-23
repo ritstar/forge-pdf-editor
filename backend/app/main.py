@@ -34,9 +34,11 @@ from docx.shared import Pt
 from pptx import Presentation
 from pptx.util import Emu
 
+from . import text_edit
+
 
 APP_TITLE = "Forge PDF Tools API"
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.4.0"
 API_KEY_HEADER = "x-api-key"
 TOKEN_HEADER = "x-forge-token"
 API_KEY_ENV = "PDF_TOOLS_API_SECRET"
@@ -58,6 +60,8 @@ PDF_TOOLS = {
     "protect-pdf",
     "pdf-to-pdfa",
     "repair-pdf",
+    "text-layout",
+    "edit-text",
 }
 OFFICE_TOOLS = {
     "word-to-pdf": {".doc", ".docx", ".odt", ".rtf", ".txt"},
@@ -161,7 +165,7 @@ app.add_middleware(
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
     # Browsers calling us directly need these to name the download and show savings.
-    expose_headers=["content-disposition", "x-original-size", "x-output-size"],
+    expose_headers=["content-disposition", "x-original-size", "x-output-size", "x-forge-warnings"],
     max_age=600,
 )
 
@@ -493,6 +497,8 @@ def run_tool(
     owner_password: str = Form(default=""),
     compression_level: str = Form(default="medium"),
     html_content: str = Form(default=""),
+    page: int = Form(default=0),
+    edits: str = Form(default=""),
 ):
     # Plain `def`: FastAPI runs it in a worker thread, so the CPU-bound and subprocess work
     # below does not block the event loop for every other request.
@@ -607,6 +613,34 @@ def run_tool(
             except pikepdf.PasswordError as exc:
                 raise HTTPException(status_code=400, detail="This PDF is already password protected.") from exc
             return _as_download(output_path, output_path.name, tmpdir)
+
+        if tool_id == "text-layout":
+            # The editor uploads one page at a time; OCR only runs for pages without text.
+            with _open_pdf(input_path) as doc:
+                if not 0 <= page < len(doc):
+                    raise HTTPException(status_code=400, detail="Page out of range.")
+                with _heavy_jobs:
+                    layout = text_edit.analyze_page(doc, page)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return JSONResponse(layout, headers={"cache-control": "no-store"})
+
+        if tool_id == "edit-text":
+            try:
+                raw_edits = json.loads(edits or "[]")
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=400, detail="Invalid text edits.") from exc
+            output_path = tmpdir / f"{stem}_edited.pdf"
+            with _open_pdf(input_path) as doc:
+                try:
+                    cleaned = text_edit.clean_edits(raw_edits, len(doc))
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail="Invalid text edits.") from exc
+                with _heavy_jobs:
+                    warnings = text_edit.apply_edits(doc, cleaned)
+                    # No subset_fonts(): it would rewrite the document's original fonts too.
+                    doc.save(str(output_path), garbage=3, deflate=True)
+            headers = {"x-forge-warnings": json.dumps(warnings)} if warnings else None
+            return _as_download(output_path, output_path.name, tmpdir, headers)
 
         if tool_id == "pdf-to-pdfa":
             output_path = tmpdir / f"{stem}_pdfa.pdf"
