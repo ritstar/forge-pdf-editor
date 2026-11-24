@@ -27,6 +27,9 @@ const ALLOWED_TOOL_IDS = new Set([
   'repair-pdf',
   'text-layout',
   'edit-text',
+  'ocr-pdf',
+  'find-text',
+  'redact-pdf',
 ]);
 
 // Must match _verify_tool_token in backend/app/main.py.
@@ -122,9 +125,9 @@ export async function POST(request, { params }) {
     if (contentDisposition) {
       headers.set('content-disposition', contentDisposition);
     }
-    const warnings = upstream.headers.get('x-forge-warnings');
-    if (warnings) {
-      headers.set('x-forge-warnings', warnings);
+    for (const name of ['x-forge-warnings', 'x-forge-ocr', 'x-forge-redactions', 'x-original-size', 'x-output-size']) {
+      const value = upstream.headers.get(name);
+      if (value) headers.set(name, value);
     }
 
     return new NextResponse(upstream.body, { status: 200, headers });

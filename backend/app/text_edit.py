@@ -25,7 +25,7 @@ from typing import Optional
 import numpy as np
 import pymupdf
 
-from . import font_detect, font_library
+from . import font_detect, font_library, ocr
 
 logger = logging.getLogger(__name__)
 
@@ -201,8 +201,8 @@ def analyze_page(doc: pymupdf.Document, page_number: int = 0) -> dict:
             result["source"] = "none"
             result["ocrUnavailable"] = True
             return result
-        textpage = page.get_textpage_ocr(language=OCR_LANGUAGES, dpi=OCR_DPI, full=True, tessdata=tessdata)
-        raw = page.get_text("rawdict", flags=TEXT_FLAGS, textpage=textpage)
+        # Not page.get_textpage_ocr(): it loses every word on pages stored with /Rotate 270.
+        raw = ocr.ocr_rawdict(page, OCR_LANGUAGES, OCR_DPI, tessdata, TEXT_FLAGS)
         _restore_ocr_spaces(raw)
         source = "ocr"
     elif _mostly_invisible(page):

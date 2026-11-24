@@ -33,8 +33,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-lato \
     fonts-ebgaramond \
     fonts-adobe-sourcesans3 \
+    # OCR languages (app/ocr.py, Edit text on scans). Scripts the bundled Noto fonts cover.
     tesseract-ocr-eng \
     tesseract-ocr-hin \
+    tesseract-ocr-fra \
+    tesseract-ocr-deu \
+    tesseract-ocr-spa \
+    tesseract-ocr-ita \
+    tesseract-ocr-por \
+    tesseract-ocr-nld \
+    tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s "$(dirname "$(find /usr/share/tesseract-ocr -name eng.traineddata | head -n 1)")" /usr/share/tessdata
 

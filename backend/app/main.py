@@ -34,11 +34,11 @@ from docx.shared import Pt
 from pptx import Presentation
 from pptx.util import Emu
 
-from . import font_library, text_edit
+from . import font_library, ocr, redact, text_edit
 
 
 APP_TITLE = "Forge PDF Tools API"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 API_KEY_HEADER = "x-api-key"
 TOKEN_HEADER = "x-forge-token"
 API_KEY_ENV = "PDF_TOOLS_API_SECRET"
@@ -62,6 +62,9 @@ PDF_TOOLS = {
     "repair-pdf",
     "text-layout",
     "edit-text",
+    "ocr-pdf",
+    "find-text",
+    "redact-pdf",
 }
 OFFICE_TOOLS = {
     "word-to-pdf": {".doc", ".docx", ".odt", ".rtf", ".txt"},
@@ -168,7 +171,7 @@ app.add_middleware(
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
     # Browsers calling us directly need these to name the download and show savings.
-    expose_headers=["content-disposition", "x-original-size", "x-output-size", "x-forge-warnings"],
+    expose_headers=["content-disposition", "x-original-size", "x-output-size", "x-forge-warnings", "x-forge-ocr", "x-forge-redactions"],
     max_age=600,
 )
 
@@ -260,6 +263,30 @@ def _open_pdf(input_path: Path) -> pymupdf.Document:
         doc.close()
         raise HTTPException(status_code=400, detail="This PDF is password protected. Unlock it first.")
     return doc
+
+
+OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "300"))
+
+
+def _flag(raw: str, default: bool) -> bool:
+    value = (raw or "").strip().lower()
+    if value in {"1", "true", "on", "yes"}:
+        return True
+    if value in {"0", "false", "off", "no"}:
+        return False
+    return default
+
+
+def _json_list(raw: str) -> list:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid JSON.") from exc
+    if not isinstance(value, list):
+        raise ValueError("Expected a list.")
+    return value
 
 
 # pdf2docx reconstructs layout (columns, tables, images, fonts); very long documents use the
@@ -502,10 +529,32 @@ def run_tool(
     html_content: str = Form(default=""),
     page: int = Form(default=0),
     edits: str = Form(default=""),
+    redactions: str = Form(default=""),
+    # Flags are strings: this FastAPI version reads a missing bool form field as False,
+    # whatever its default, so "on unless told otherwise" options need explicit parsing.
+    scrub_metadata: str = Form(default=""),
+    languages: str = Form(default=""),
+    auto_rotate: str = Form(default=""),
+    query: str = Form(default=""),
+    patterns: str = Form(default=""),
+    match_case: str = Form(default=""),
+    whole_word: str = Form(default=""),
+    search_scans: str = Form(default=""),
+    allow_print: str = Form(default=""),
+    allow_copy: str = Form(default=""),
+    allow_modify: str = Form(default=""),
 ):
     # Plain `def`: FastAPI runs it in a worker thread, so the CPU-bound and subprocess work
     # below does not block the event loop for every other request.
     identity = _authenticate(request, tool_id)
+    scrub_metadata = _flag(scrub_metadata, False)
+    auto_rotate = _flag(auto_rotate, True)
+    match_case = _flag(match_case, False)
+    whole_word = _flag(whole_word, False)
+    search_scans = _flag(search_scans, False)
+    allow_print = _flag(allow_print, True)
+    allow_copy = _flag(allow_copy, True)
+    allow_modify = _flag(allow_modify, True)
     if tool_id not in ALL_TOOLS:
         raise HTTPException(status_code=404, detail="Unknown tool ID.")
     _enforce_rate_limit(identity)
@@ -601,17 +650,26 @@ def run_tool(
                 raise HTTPException(status_code=400, detail="Password is required to protect a PDF.")
 
             output_path = tmpdir / f"{stem}_protected.pdf"
+            restricted = not (allow_print and allow_copy and allow_modify)
+            # Restrictions only bind people who don't know the owner password, so it must differ
+            # from the open password; generate one when the user didn't choose it.
+            owner = owner_password or (secrets.token_urlsafe(24) if restricted else password)
+            permissions = pikepdf.Permissions(
+                accessibility=True,
+                extract=allow_copy,
+                modify_annotation=allow_modify,
+                modify_assembly=allow_modify,
+                modify_form=allow_modify,
+                modify_other=allow_modify,
+                print_lowres=allow_print,
+                print_highres=allow_print,
+            )
             try:
                 with pikepdf.open(str(input_path)) as pdf:
                     # AES-256 (R6). Keeps bookmarks, links, forms and metadata intact.
                     pdf.save(
                         str(output_path),
-                        encryption=pikepdf.Encryption(
-                            user=password,
-                            owner=owner_password or password,
-                            R=6,
-                            allow=pikepdf.Permissions(),
-                        ),
+                        encryption=pikepdf.Encryption(user=password, owner=owner, R=6, allow=permissions),
                     )
             except pikepdf.PasswordError as exc:
                 raise HTTPException(status_code=400, detail="This PDF is already password protected.") from exc
@@ -636,14 +694,79 @@ def run_tool(
             with _open_pdf(input_path) as doc:
                 try:
                     cleaned = text_edit.clean_edits(raw_edits, len(doc))
+                    boxes = redact.clean_boxes(_json_list(redactions), len(doc))
                 except (TypeError, ValueError) as exc:
-                    raise HTTPException(status_code=400, detail="Invalid text edits.") from exc
+                    raise HTTPException(status_code=400, detail="Invalid edits.") from exc
                 with _heavy_jobs:
-                    warnings = text_edit.apply_edits(doc, cleaned)
+                    warnings = text_edit.apply_edits(doc, cleaned) if cleaned else []
+                    # Redaction runs last so it also removes edited text under a box.
+                    redacted = redact.apply_redactions(doc, boxes) if boxes else 0
+                    if scrub_metadata:
+                        redact.scrub_metadata(doc)
                     # No subset_fonts(): it would rewrite the document's original fonts too.
-                    doc.save(str(output_path), garbage=3, deflate=True)
-            headers = {"x-forge-warnings": json.dumps(warnings)} if warnings else None
-            return _as_download(output_path, output_path.name, tmpdir, headers)
+                    # Redacted content must not survive as unreferenced objects: collect garbage.
+                    doc.save(str(output_path), garbage=4 if redacted else 3, deflate=True, clean=bool(redacted))
+            headers = {}
+            if warnings:
+                headers["x-forge-warnings"] = json.dumps(warnings)
+            if redacted:
+                headers["x-forge-redactions"] = str(redacted)
+            return _as_download(output_path, output_path.name, tmpdir, headers or None)
+
+        if tool_id == "redact-pdf":
+            output_path = tmpdir / f"{stem}_redacted.pdf"
+            with _open_pdf(input_path) as doc:
+                try:
+                    boxes = redact.clean_boxes(_json_list(redactions), len(doc))
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail="Invalid redactions.") from exc
+                if not boxes and not scrub_metadata:
+                    raise HTTPException(status_code=400, detail="Mark at least one area to redact.")
+                with _heavy_jobs:
+                    redacted = redact.apply_redactions(doc, boxes)
+                    if scrub_metadata:
+                        redact.scrub_metadata(doc)
+                    doc.save(str(output_path), garbage=4, deflate=True, clean=True)
+            return _as_download(output_path, output_path.name, tmpdir, {"x-forge-redactions": str(redacted)})
+
+        if tool_id == "find-text":
+            selected = [p for p in re.split(r"[,\s]+", patterns) if p]
+            searches = redact.build_searches(query, selected, match_case, whole_word)
+            if not searches:
+                raise HTTPException(status_code=400, detail="Enter text to find or choose what to look for.")
+            tessdata = text_edit.tessdata_dir() if search_scans else None
+            with _open_pdf(input_path) as doc:
+                with _heavy_jobs:
+                    found = redact.find_matches(
+                        doc,
+                        searches,
+                        ocr_languages=ocr.parse_languages(languages, tessdata, text_edit.OCR_LANGUAGES) if tessdata else "",
+                        tessdata=tessdata,
+                    )
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return JSONResponse(found, headers={"cache-control": "no-store"})
+
+        if tool_id == "ocr-pdf":
+            tessdata = text_edit.tessdata_dir()
+            if not tessdata:
+                raise HTTPException(status_code=503, detail="Text recognition isn't available on this server.")
+            chosen = ocr.parse_languages(languages, tessdata, text_edit.OCR_LANGUAGES)
+            output_path = tmpdir / f"{stem}_ocr.pdf"
+            with _open_pdf(input_path) as doc:
+                if len(doc) > OCR_MAX_PAGES:
+                    raise HTTPException(status_code=400, detail=f"OCR is limited to {OCR_MAX_PAGES} pages. Split the PDF first.")
+                with _heavy_jobs:
+                    summary = ocr.ocr_document(
+                        doc,
+                        languages=chosen,
+                        tessdata=tessdata,
+                        dpi=text_edit.OCR_DPI,
+                        auto_rotate=auto_rotate,
+                        max_pages=OCR_MAX_PAGES,
+                    )
+                    doc.save(str(output_path), garbage=4, deflate=True)
+            stats = {**summary.as_dict(), "languages": chosen}
+            return _as_download(output_path, output_path.name, tmpdir, {"x-forge-ocr": json.dumps(stats)})
 
         if tool_id == "pdf-to-pdfa":
             output_path = tmpdir / f"{stem}_pdfa.pdf"
