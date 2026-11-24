@@ -27,9 +27,12 @@ Edit, sign, convert, compress and organize PDFs — right in your browser.
 
 ## ✨ Highlights
 
-- **21 tools, one workspace** — organize, optimize, convert, edit & sign, and secure PDFs.
+- **24 tools, one workspace** — organize, optimize, convert, edit & sign, and secure PDFs.
 - **Private by default** — merge, split, organize, rotate, watermark, page numbers and image conversion run **entirely in your browser**. Those files never leave your device.
-- **A real editor** — rewrite the text already in a PDF (scans too, via OCR) in a matching font, add text, images and reusable signatures, fill PDF forms, undo/redo, autosaved drafts, page thumbnails, touch support.
+- **A real editor** — rewrite the text already in a PDF (scans too, via OCR) in a matching font; draw, highlight, add shapes, arrows, check marks and text; sign by **drawing, typing or uploading** a signature; fill PDF forms; undo/redo, autosaved drafts, keyboard shortcuts, touch support.
+- **True redaction** — find names, emails, phone and card numbers (or drag over anything) and the content is **removed from the file**, not just covered with a black box.
+- **OCR that keeps the look** — scanned PDFs become searchable and selectable in 9 languages; sideways and upside-down scans are turned upright.
+- **What you see is what you get** — watermark and page-number tools preview the real output page by page.
 - **Speaks every script** — exports embed subset Noto fonts on demand, so `₹`, `Привет`, `café` and `नमस्ते` come out as real, searchable text.
 - **Pro-grade engines** — Ghostscript compression that never makes files bigger, layout-preserving PDF → Word (pdf2docx), table extraction to Excel, LibreOffice Office conversion, AES-256 encryption.
 - **Polished UI** — a cohesive design system with light & dark themes, responsive down to phones.
@@ -44,6 +47,10 @@ Edit, sign, convert, compress and organize PDFs — right in your browser.
 | <img src="docs/screenshots/dashboard.png" alt="Dashboard" /> | <img src="docs/screenshots/editor.png" alt="Editor" /> |
 | **Editor — dark theme** | **Organize pages** |
 | <img src="docs/screenshots/editor-dark.png" alt="Editor in dark theme" /> | <img src="docs/screenshots/organize.png" alt="Organize PDF tool" /> |
+| **Draw, type or upload a signature** | **Find & redact** |
+| <img src="docs/screenshots/signature.png" alt="Signature dialog with typed handwriting styles" /> | <img src="docs/screenshots/redact.png" alt="Finding emails, phone and card numbers to redact" /> |
+| **Watermark with live preview** | **Phone** |
+| <img src="docs/screenshots/watermark.png" alt="Watermark tool with a live preview" /> | <img src="docs/screenshots/mobile.png" alt="Editor on a phone" width="240" /> |
 | **Sign up** | **Landing — dark theme** |
 | <img src="docs/screenshots/signup-dark.png" alt="Sign up page" /> | <img src="docs/screenshots/landing-dark.png" alt="Landing page in dark theme" /> |
 
@@ -58,10 +65,11 @@ Edit, sign, convert, compress and organize PDFs — right in your browser.
 | Category | Tool | Runs | Powered by |
 | --- | --- | :---: | --- |
 | **Organize** | Merge PDF — drag to reorder | 🔒 | `@cantoo/pdf-lib` |
-| | Split PDF — extract a range or every page to a ZIP | 🔒 | `@cantoo/pdf-lib`, `fflate` |
-| | Organize PDF — reorder / remove pages visually, with undo | 🔒 | `@cantoo/pdf-lib`, `react-pdf` |
+| | Split PDF — page ranges (`1-3, 5, 8-last`), every N pages, or click the pages you want; one PDF or a ZIP | 🔒 | `@cantoo/pdf-lib`, `fflate` |
+| | Organize PDF — reorder, rotate, duplicate, remove, insert blank pages, add pages from more PDFs; multi-select, undo | 🔒 | `@cantoo/pdf-lib`, `pdf.js` |
 | | Rotate PDF — per page or all, respects existing rotation | 🔒 | `@cantoo/pdf-lib` |
 | **Optimize** | Compress PDF — 3 levels, shows savings, never larger than input | ☁️ | Ghostscript + pikepdf |
+| | OCR PDF — searchable text layer, page images untouched, 9 languages, auto-rotates scans | ☁️ | Tesseract via PyMuPDF |
 | | Repair PDF | ☁️ | pikepdf (qpdf), PyMuPDF fallback |
 | | PDF to PDF/A | ☁️ | Ghostscript |
 | **Convert to PDF** | Word, PowerPoint, Excel to PDF | ☁️ | LibreOffice |
@@ -70,23 +78,30 @@ Edit, sign, convert, compress and organize PDFs — right in your browser.
 | **Convert from PDF** | PDF to Word — layout, tables and images preserved | ☁️ | pdf2docx (PyMuPDF fallback) |
 | | PDF to Excel — real table detection | ☁️ | PyMuPDF `find_tables` |
 | | PDF to PowerPoint — slides match the page aspect | ☁️ | PyMuPDF + python-pptx |
-| | PDF to JPG / PNG — standard or high quality, ZIP download | 🔒 | `pdf.js`, `fflate` |
+| | PDF to JPG / PNG — 150 / 220 / 300 DPI, any pages, ZIP download | 🔒 | `pdf.js`, `fflate` |
 | **Edit & Sign** | Edit & Sign PDF (the editor) | 💾 | `react-pdf`, `@cantoo/pdf-lib` |
-| | Page Numbers — position picker, formats, start number, skip cover | 🔒 | `@cantoo/pdf-lib` |
-| | Add Watermark — live preview, colors, opacity, any language | 🔒 | `@cantoo/pdf-lib`, Noto fonts |
-| **Security** | Protect PDF — AES-256 with confirm & show-password | ☁️ | pikepdf |
+| | Sign PDF — opens the editor ready to sign | 💾 | the editor |
+| | Page Numbers — 6 positions, formats like `Page 1 of 9` or your own, font, size, color, page range, mirrored for books; live preview | 🔒 | `@cantoo/pdf-lib` |
+| | Add Watermark — text or image, once or tiled, any angle, behind or over content, page range; live preview | 🔒 | `@cantoo/pdf-lib`, Noto fonts |
+| **Security** | Redact PDF — find text and patterns or mark areas; content is permanently removed | 💾 ☁️ | PyMuPDF redaction |
+| | Protect PDF — AES-256, choose whether printing, copying and editing are allowed | ☁️ | pikepdf |
 | | Unlock PDF — clear "wrong password" feedback | ☁️ | pikepdf |
 
 ### The editor
 
-- Full-screen workspace: command bar, page thumbnails, canvas, and a properties inspector
+- Full-screen workspace: command bar, a tool strip (scrolls on phones), page thumbnails, canvas, and a properties inspector
+- **Tools**: select, edit text, add text, sign, draw (pen), highlight, rectangle, ellipse, line, arrow, check / cross / dot marks, image, whiteout and redact — pick one and click or drag on the page. Hold <kbd>Shift</kbd> for squares, circles and 45° lines
 - **Edit existing text** in place, keeping the original font when it contains every character typed (even subset fonts); otherwise the same family from the server's font library or a metric-compatible look-alike (Arial → Arimo, Calibri → Carlito, …). Any installed font can be picked instead. On scans the typeface (and bold/italic) is detected by comparing the recognised words' shapes with the installed fonts. Scanned pages are read with OCR (English + Hindi) and painted over in the sampled paper color ☁️
-- Text with size, color and bold; images; **saved signatures** with automatic white-background removal
+- Text boxes that grow with their content: font (sans, serif, mono), size, bold, italic, alignment, color, opacity
+- **Signatures and initials**: draw them (pressure- and speed-sensitive ink), type them in one of four handwriting fonts, or upload a photo — the paper is removed with soft, anti-aliased edges. Saved signatures are reused on any document; click on the page to place
+- **Redaction**: search for words or patterns (emails, phone numbers, card numbers with a checksum test, SSNs, IBANs, links, dates) — scanned pages are searched with OCR — review the hits, and mark them. On download the server removes everything under each mark (text, image pixels, vector art, links, form fields) and the document metadata
+- Images and signatures keep their proportions when resized; opacity, bring to front / send to back, duplicate, **copy to all pages**
+- Paste images or text straight onto the page, or drop image files on it
 - **Fill & sign** — detects interactive form fields (text, checkbox, radio, dropdown); quick-fill name, email, address, phone, date and initials when a PDF has none
-- Floating item toolbar, layers panel, keyboard shortcuts (<kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd>, <kbd>⌘S</kbd>, <kbd>Del</kbd>, arrow-key nudge)
+- Floating item toolbar, layers panel, keyboard shortcuts for every tool (press <kbd>?</kbd>), <kbd>⌘C</kbd> / <kbd>⌘V</kbd> / <kbd>⌘D</kbd>, <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd>, <kbd>⌘S</kbd>, <kbd>Del</kbd>, arrow-key nudge, <kbd>PgUp</kbd> / <kbd>PgDn</kbd>, ⌘ + scroll to zoom
 - Pointer events for mouse, touch and pen; side panels become drawers on tablets and phones
 - **Autosave** with a live status, flush on navigation, unsaved-changes guard
-- Exports to PDF, PNG or JPG; placement is correct on rotated and cropped pages
+- Exports to PDF (optionally with the form flattened), PNG or JPG; the same vector paths are drawn on screen and into the PDF, so placement and shapes match exactly, also on rotated and cropped pages
 
 ### The workspace
 
@@ -177,6 +192,7 @@ Render's free tier sleeps the backend after ~15 minutes idle. Instead of a myste
 - **Firestore rules** — users can only read and write their own records and can't create or transfer data for anyone else.
 - **Uploads** — short-lived Vercel Blob client tokens restricted to the caller's own path, allowed MIME types and size; deletes are checked against the owner's path prefix.
 - **Backend** — shared-secret or signed tool tokens, client filenames never touch the filesystem, strict input validation, per-user rate limits, subprocess timeouts, no external fetches for HTML rendering.
+- **Redaction** — applied by the server with MuPDF's redaction engine, then the file is garbage-collected and rewritten, so removed text, pixels, links and metadata can't be recovered from the download.
 - **Headers** — CSP, HSTS, `X-Frame-Options: DENY`, `nosniff`, strict referrer and permissions policies in production.
 
 ---
@@ -264,7 +280,8 @@ docker compose up --build pdf-tools-api
 | `SUBPROCESS_TIMEOUT_SECONDS` | `100` | Timeout for LibreOffice / Ghostscript |
 | `MAX_CONCURRENT_CONVERSIONS` | `2` | Heavy jobs allowed in parallel |
 | `PDF2DOCX_MAX_PAGES` | `150` | Longer documents use the fast text-based Word conversion |
-| `OCR_LANGUAGES` | `eng+hin` | Tesseract languages for reading scanned pages in Edit text |
+| `OCR_LANGUAGES` | `eng+hin` | Tesseract languages for reading scanned pages in Edit text (OCR PDF lets users pick from the installed ones) |
+| `OCR_MAX_PAGES` | `300` | Longest document OCR PDF accepts |
 | `OCR_DPI` | `300` | Resolution scanned pages are read at |
 | `TESSDATA_PREFIX` | set in the image | Folder with Tesseract language data; without it, scanned pages can't be edited |
 | `FONT_DIRS` | bundled + system font folders | Folders (`:`-separated) indexed for the text-edit font library and picker |
@@ -302,13 +319,17 @@ app/
 │   ├── blob/upload|delete  Client upload tokens, owner-checked deletes
 │   └── pdf-tools/          Tool tokens, streaming proxy, backend status
 ├── components/             ForgeEditor, ToolShell, headers, dashboard, UI primitives
+│   └── editor/             Element model, tool strip, inspector, signature dialog, find & redact
 └── utils/                  PDF generation, fonts, coordinates, hooks
 backend/
 ├── app/main.py             FastAPI conversion service
+├── app/ocr.py              OCR PDF: invisible text layer, orientation detection
+├── app/redact.py           Find text and patterns, true redaction, metadata removal
 ├── app/text_edit.py        Edit text: finds lines (OCR for scans), rewrites them in place
 ├── app/font_library.py     Installed fonts, PDF font name matching, subset embedding
 ├── app/font_detect.py      Typeface detection on scans from word shapes
 ├── app/fonts/              Bundled Noto fonts (OFL), the fallback of last resort
+├── tests/                  pytest suite (OCR tests run when Tesseract data is installed)
 ├── Dockerfile              LibreOffice, Ghostscript, Tesseract, the font library
 └── requirements.txt
 lib/                        Firebase, server helpers, tool catalog
@@ -326,6 +347,10 @@ npm run dev      # start the dev server
 npm run build    # production build
 npm run start    # serve the production build
 npm run lint     # ESLint
+
+# Backend tests (from backend/). Point TESSDATA_PREFIX at Tesseract data to include OCR tests.
+pip install -r requirements-dev.txt
+pytest
 ```
 
 ---
@@ -334,6 +359,7 @@ npm run lint     # ESLint
 
 - Built by [**RitstaR**](https://github.com/ritstar)
 - Fonts: [Noto Sans](https://github.com/notofonts/latin-greek-cyrillic) and [Noto Sans Devanagari](https://github.com/notofonts/devanagari) — SIL Open Font License ([`public/fonts/OFL.txt`](public/fonts/OFL.txt))
+- Signature fonts: Dancing Script, Great Vibes, Caveat and Sacramento via [Fontsource](https://fontsource.org) — SIL Open Font License
 - Text-edit font library (installed from Debian in the backend image, each under its own license): Arimo, Tinos and Cousine (Croscore), Carlito, Caladea, the URW base35 fonts, Noto, Roboto, Open Sans, Lato, EB Garamond, Source Sans 3, Liberation and DejaVu
 - [Tesseract](https://github.com/tesseract-ocr/tesseract) for OCR and [fontTools](https://github.com/fonttools/fonttools) for font matching and subsetting
 - Standing on the shoulders of [pdf.js](https://github.com/mozilla/pdf.js), [pdf-lib](https://github.com/Hopding/pdf-lib) & [Cantoo's fork](https://github.com/cantoo-scribe/pdf-lib), [qpdf / pikepdf](https://github.com/pikepdf/pikepdf), [PyMuPDF](https://github.com/pymupdf/PyMuPDF), [pdf2docx](https://github.com/ArtifexSoftware/pdf2docx), [Ghostscript](https://www.ghostscript.com/), [LibreOffice](https://www.libreoffice.org/) and [WeasyPrint](https://weasyprint.org/)
