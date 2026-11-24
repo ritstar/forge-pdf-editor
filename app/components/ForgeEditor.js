@@ -1,9 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
-  Bold,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -11,9 +10,10 @@ import {
   Copy,
   Download,
   Eraser,
+  FileCheck2,
   FileImage,
-  ImagePlus,
-  Italic,
+  Files,
+  Keyboard,
   Layers,
   Loader2,
   LogOut,
@@ -21,16 +21,12 @@ import {
   MoreHorizontal,
   PanelLeft,
   Plus,
-  Redo2,
   RotateCcw,
   Save,
   ScanText,
-  Signature,
   SlidersHorizontal,
   Trash2,
   Type,
-  Undo2,
-  Upload,
   X,
   ZoomIn,
   ZoomOut,
@@ -39,190 +35,167 @@ import { Document, Page } from 'react-pdf';
 import { PDFDocument } from '@cantoo/pdf-lib';
 import LazyPage from './ui/LazyPage';
 import Menu from './ui/Menu';
+import ElementGraphic from './editor/ElementGraphic';
+import FindRedactPanel from './editor/FindRedactPanel';
+import Inspector from './editor/Inspector';
+import SignatureDialog from './editor/SignatureDialog';
+import Toolstrip, { TOOL_KEYS } from './editor/Toolstrip';
+import {
+  clamp,
+  createImage,
+  createText,
+  DEFAULT_TOOL_STYLES,
+  describeElement,
+  fontCss,
+  hydrateElements,
+  isLine,
+  keepsRatio,
+  lineFromPoints,
+  makeId,
+  moveLineEnd,
+  resizeBox,
+  serializeElements,
+  snapAngle,
+} from './editor/model';
 import '../utils/pdfWorker';
 import { convertPdfToImage } from '../utils/pdfToImage';
-import { removeWhiteBackground } from '../utils/imageProcessing';
-import { generatePdf } from '../utils/pdfGenerator';
+import { imageSize, prepareImageForUpload } from '../utils/imageProcessing';
+import { generatePdf, LINE_HEIGHT, TEXT_INSET } from '../utils/pdfGenerator';
 import { extractFormFieldsFromPdfBytes, getInitialsFromName } from '../utils/pdfForms';
 import { downloadBlob, downloadPdfBytes, stripExtension } from '../utils/files';
-import {
-  applyTextEdits,
-  createTextEdit,
-  fetchTextLayout,
-  fontDisplayName,
-  groupFonts,
-  isChangedTextEdit,
-  keepsOriginalStyle,
-  previewFontFamily,
-} from '../utils/textEditing';
+import { simplifyPoints } from '../utils/vectorPaths';
+import { applyServerEdits, createTextEdit, fetchTextLayout, groupFonts, isChangedTextEdit, previewFontFamily } from '../utils/textEditing';
 
-const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
-const HISTORY_LIMIT = 60;
+const HISTORY_LIMIT = 80;
 const COALESCE_MS = 1000;
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+// Tools that create something by clicking or dragging on the page.
+const CREATE_TOOLS = new Set(['text', 'pen', 'highlight', 'rect', 'ellipse', 'line', 'arrow', 'whiteout', 'redact', 'check', 'cross', 'dot', 'place']);
+// Tools that stay active after use, for marking several things in a row.
+const STICKY_TOOLS = new Set(['pen', 'highlight', 'whiteout', 'redact', 'check', 'cross', 'dot']);
+// Pen strokes this close together in time become one drawing (a handwritten word).
+const INK_MERGE_MS = 1600;
+const CLIP_MARKER = '⁣forge-element';
+const TOOL_STYLE_KEY = 'forge-tool-styles';
+
+const SHORTCUTS = [
+  ['V', 'Select'],
+  ['E', 'Edit existing text'],
+  ['T', 'Add text'],
+  ['S', 'Add signature'],
+  ['D', 'Draw'],
+  ['H', 'Highlight'],
+  ['R / O / L / A', 'Rectangle, ellipse, line, arrow'],
+  ['K', 'Check mark'],
+  ['W', 'Whiteout'],
+  ['X', 'Redact'],
+  ['⌘C / ⌘V / ⌘D', 'Copy, paste, duplicate'],
+  ['⌘Z / ⇧⌘Z', 'Undo / redo'],
+  ['Del', 'Delete selection'],
+  ['Arrows', 'Nudge (Shift: further)'],
+  ['Shift + drag', 'Keep proportions / straight lines'],
+  ['PgUp / PgDn', 'Previous / next page'],
+  ['⌘+ / ⌘− / ⌘0', 'Zoom in, out, fit'],
+  ['⌘S', 'Save now'],
+  ['Esc', 'Back to Select'],
+];
 
 function isEditableTarget(target) {
   const tag = target?.tagName?.toLowerCase();
   return tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(target?.isContentEditable);
 }
 
-const makeId = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
+function loadToolStyles() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(TOOL_STYLE_KEY) || '{}');
+    return Object.fromEntries(Object.entries(DEFAULT_TOOL_STYLES).map(([key, value]) => [key, { ...value, ...(stored[key] || {}) }]));
+  } catch {
+    return DEFAULT_TOOL_STYLES;
   }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-};
+}
 
-function createTextElement(pageIndex) {
-  return {
-    id: makeId(),
-    type: 'text',
-    pageIndex,
-    x: 0.12,
-    y: 0.12,
-    width: 0.35,
-    height: 0.09,
-    text: 'Double-click to edit',
-    fontSize: 0.03,
-    color: '#111827',
-    bold: false,
-    quickFillKey: null,
+/**
+ * A text box that grows to fit its content. A hidden copy of the text is measured after
+ * every render, so the box (and its selection frame) always matches what is exported.
+ */
+function TextBox({ item, editing, size, onText, onAutoHeight, onDone }) {
+  const mirrorRef = useRef(null);
+  const fontPx = Math.max(item.fontSize * size.width, 4);
+  const style = {
+    color: item.color,
+    fontWeight: item.bold ? 700 : 400,
+    fontStyle: item.italic ? 'italic' : 'normal',
+    fontFamily: fontCss(item.fontFamily),
+    fontSize: `${fontPx}px`,
+    textAlign: item.align || 'left',
+    padding: `${fontPx * TEXT_INSET}px`,
+    lineHeight: LINE_HEIGHT,
   };
-}
 
-function createImageElement({ pageIndex, isSignature = false, file, url, storagePath, assetBucket, mimeType, signatureId }) {
-  const objectUrl = !url && file ? URL.createObjectURL(file) : null;
-  return {
-    id: makeId(),
-    type: 'image',
-    pageIndex,
-    x: 0.1,
-    y: 0.1,
-    width: isSignature ? 0.26 : 0.3,
-    height: isSignature ? 0.12 : 0.2,
-    file: file || null,
-    url: url || objectUrl,
-    objectUrl,
-    isSignature,
-    storagePath: storagePath || null,
-    assetBucket: assetBucket || null,
-    mimeType: mimeType || file?.type || null,
-    signatureId: signatureId || null,
-  };
-}
-
-function hydrateElements(serialized = []) {
-  if (!Array.isArray(serialized)) return [];
-  return serialized
-    .filter((item) => item && item.type)
-    .map((item) => {
-      if (item.type === 'text') {
-        return {
-          id: item.id || makeId(),
-          type: 'text',
-          pageIndex: item.pageIndex ?? 0,
-          x: item.x ?? 0.1,
-          y: item.y ?? 0.1,
-          width: item.width ?? 0.3,
-          height: item.height ?? 0.1,
-          text: item.text ?? '',
-          fontSize: item.fontSize ?? 0.03,
-          color: item.color || '#111827',
-          bold: Boolean(item.bold),
-          quickFillKey: item.quickFillKey || null,
-        };
-      }
-
-      if (item.type === 'textEdit' && item.original) {
-        return { ...serializeTextEdit(item), id: item.id || makeId() };
-      }
-
-      if (item.type === 'image') {
-        return {
-          id: item.id || makeId(),
-          type: 'image',
-          pageIndex: item.pageIndex ?? 0,
-          x: item.x ?? 0.1,
-          y: item.y ?? 0.1,
-          width: item.width ?? 0.3,
-          height: item.height ?? 0.2,
-          file: null,
-          url: item.url || null,
-          objectUrl: null,
-          isSignature: Boolean(item.isSignature),
-          storagePath: item.storagePath || null,
-          assetBucket: item.assetBucket || null,
-          mimeType: item.mimeType || null,
-          signatureId: item.signatureId || null,
-        };
-      }
-
-      return null;
-    })
-    .filter(Boolean);
-}
-
-// Edits of text already in the PDF: the line's box is fixed, only its content and style change.
-function serializeTextEdit(item) {
-  return {
-    id: item.id,
-    type: 'textEdit',
-    pageIndex: item.pageIndex ?? 0,
-    lineId: item.lineId,
-    x: item.x,
-    y: item.y,
-    width: item.width,
-    height: item.height,
-    text: item.text ?? '',
-    size: item.size,
-    color: item.color || '#000000',
-    bold: Boolean(item.bold),
-    italic: Boolean(item.italic),
-    family: item.family || 'sans',
-    fontFamily: item.fontFamily || '',
-    pageWidth: item.pageWidth,
-    original: { ...item.original },
-  };
-}
-
-function serializeElements(elements = []) {
-  return elements.map((item) => {
-    if (item.type === 'textEdit') {
-      return serializeTextEdit(item);
-    }
-
-    if (item.type === 'text') {
-      return {
-        id: item.id,
-        type: 'text',
-        pageIndex: item.pageIndex,
-        x: item.x,
-        y: item.y,
-        width: item.width,
-        height: item.height,
-        text: item.text,
-        fontSize: item.fontSize,
-        color: item.color,
-        bold: Boolean(item.bold),
-        quickFillKey: item.quickFillKey || null,
-      };
-    }
-
-    return {
-      id: item.id,
-      type: 'image',
-      pageIndex: item.pageIndex,
-      x: item.x,
-      y: item.y,
-      width: item.width,
-      height: item.height,
-      isSignature: Boolean(item.isSignature),
-      storagePath: item.storagePath || null,
-      assetBucket: item.assetBucket || null,
-      mimeType: item.mimeType || null,
-      signatureId: item.signatureId || null,
-      url: item.storagePath ? null : item.url,
-    };
+  useLayoutEffect(() => {
+    const node = mirrorRef.current;
+    if (!node || !size.height) return;
+    const needed = Math.min(node.offsetHeight / size.height, 1 - item.y);
+    if (Math.abs(needed - item.height) * size.height > 0.5) onAutoHeight(item.id, Math.max(needed, 0.005));
   });
+
+  return (
+    <>
+      <div ref={mirrorRef} className="text-mirror" style={style} aria-hidden="true">
+        {`${item.text || 'Type here'}​`}
+      </div>
+      {editing ? (
+        <textarea
+          autoFocus
+          value={item.text}
+          placeholder="Type here"
+          onChange={(event) => onText(event.target.value)}
+          onBlur={onDone}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') event.currentTarget.blur();
+          }}
+          className="inline-editor"
+          style={style}
+          aria-label="Text"
+        />
+      ) : (
+        <div className="text-content" style={{ ...style, opacity: item.opacity ?? 1 }}>
+          {item.text}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ShortcutsDialog({ onClose }) {
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key === 'Escape' || event.key === '?') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="modal-backdrop" role="presentation" onPointerDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="modal shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+        <div className="sig-dialog-head">
+          <h3 id="shortcuts-title">Keyboard shortcuts</h3>
+          <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="Close" autoFocus>
+            <X size={16} />
+          </button>
+        </div>
+        <dl className="shortcut-list">
+          {SHORTCUTS.map(([keys, label]) => (
+            <div key={keys}>
+              <dt>{label}</dt>
+              <dd><span className="kbd">{keys}</span></dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+    </div>
+  );
 }
 
 export default function ForgeEditor({
@@ -231,6 +204,7 @@ export default function ForgeEditor({
   documentTitle,
   initialPdfFile,
   initialDraft,
+  initialTool,
   signatures,
   onSaveDraft,
   onUploadOverlay,
@@ -244,11 +218,17 @@ export default function ForgeEditor({
   const [currentPage, setCurrentPage] = useState(initialDraft?.currentPage || 1);
   const [elements, setElementsState] = useState(() => hydrateElements(initialDraft?.elements || []));
   const [selectedId, setSelectedId] = useState(null);
-  const [hoverId, setHoverId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [zoom, setZoom] = useState(initialDraft?.zoom || 1);
   const [busy, setBusy] = useState(false);
-  const [leftTab, setLeftTab] = useState('pages');
+  const [tool, setToolState] = useState(initialTool === 'redact' || initialTool === 'edit-text' ? initialTool : 'select');
+  const [toolStyles, setToolStyles] = useState(loadToolStyles);
+  const [draft, setDraft] = useState(null);
+  const [placement, setPlacement] = useState(null);
+  const [hoverPoint, setHoverPoint] = useState(null);
+  const [signatureDialog, setSignatureDialog] = useState(initialTool === 'sign' ? 'signature' : null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [leftTab, setLeftTab] = useState(initialTool === 'redact' ? 'redact' : 'pages');
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [historyFlags, setHistoryFlags] = useState({ canUndo: false, canRedo: false });
@@ -256,7 +236,6 @@ export default function ForgeEditor({
   const [containerWidth, setContainerWidth] = useState(980);
   const [saveStatus, setSaveStatus] = useState('saved');
   const [saveError, setSaveError] = useState('');
-  const [signatureName, setSignatureName] = useState('');
   const [formFields, setFormFields] = useState([]);
   const [formValues, setFormValues] = useState(() => initialDraft?.formValues || {});
   const [formLoading, setFormLoading] = useState(false);
@@ -268,17 +247,19 @@ export default function ForgeEditor({
   }));
 
   // "Edit text" mode: detected lines per page index ({ status, lines, source, ... }).
-  const [textMode, setTextMode] = useState(false);
+  const textMode = tool === 'edit-text';
   const [layouts, setLayouts] = useState({});
   const [exportNotice, setExportNotice] = useState('');
 
   const imageInputRef = useRef(null);
-  const signatureInputRef = useRef(null);
   const layoutRequestsRef = useRef(new Set());
   const sourceDocRef = useRef(null);
   const shellRef = useRef(null);
   const canvasRef = useRef(null);
   const interactionRef = useRef(null);
+  const drawRef = useRef(null);
+  const lastInkRef = useRef(null);
+  const clipboardRef = useRef(null);
   const initializedRef = useRef(false);
   const saveTimerRef = useRef(null);
   const lastSavedPayloadRef = useRef(null);
@@ -286,6 +267,8 @@ export default function ForgeEditor({
   const saveQueueRef = useRef(Promise.resolve());
   const saveStatusRef = useRef('saved');
   const elementsRef = useRef(elements);
+  const keyHandlerRef = useRef(null);
+  const clipboardHandlersRef = useRef(null);
   // Snapshots are the previous immutable arrays themselves; every edit produces new objects,
   // so there is no need to deep-clone (which also copied File blobs on every keystroke).
   const historyRef = useRef({ past: [], future: [], lastKey: null, lastAt: 0 });
@@ -317,6 +300,14 @@ export default function ForgeEditor({
   }, [saveStatus]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(TOOL_STYLE_KEY, JSON.stringify(toolStyles));
+    } catch {
+      // Storage is a convenience only.
+    }
+  }, [toolStyles]);
+
+  useEffect(() => {
     setQuickFill((prev) => ({
       ...prev,
       name: prev.name || userName || '',
@@ -337,6 +328,22 @@ export default function ForgeEditor({
     () => elements.filter((item) => item.pageIndex === currentPage - 1),
     [elements, currentPage],
   );
+  const redactionCount = useMemo(() => elements.filter((item) => item.type === 'redact').length, [elements]);
+  // Page width / height as displayed, to keep things square on screen.
+  const aspect = renderSize.width / (renderSize.height || 1);
+
+  const setTool = useCallback((next) => {
+    setToolState(next);
+    if (next !== 'place') {
+      setPlacement(null);
+      setHoverPoint(null);
+    }
+    if (CREATE_TOOLS.has(next)) {
+      setSelectedId(null);
+      setEditingId(null);
+    }
+    lastInkRef.current = null;
+  }, []);
 
   const loadLayout = useCallback(
     async (pageIndex) => {
@@ -468,16 +475,41 @@ export default function ForgeEditor({
     };
   }, []);
 
+  const zoomBy = useCallback((delta) => {
+    setZoom((z) => clamp(Math.round((z + delta) * 10) / 10, ZOOM_MIN, ZOOM_MAX));
+  }, []);
+
   useEffect(() => {
     // The canvas mounts only after the PDF loads, so re-run when the page count arrives.
-    if (!shellRef.current) return undefined;
+    const shell = shellRef.current;
+    if (!shell) return undefined;
     const observer = new ResizeObserver(([entry]) => {
       setContainerWidth(entry.contentRect.width);
     });
-    observer.observe(shellRef.current);
-    return () => observer.disconnect();
-  }, [numPages]);
+    observer.observe(shell);
+    // Ctrl/⌘ + wheel (and trackpad pinch, which browsers report the same way) zooms the page.
+    const onWheel = (event) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      zoomBy(event.deltaY < 0 ? 0.1 : -0.1);
+    };
+    shell.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      observer.disconnect();
+      shell.removeEventListener('wheel', onWheel);
+    };
+  }, [numPages, zoomBy]);
 
+  const pointFromEvent = useCallback((event) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect || !rect.width || !rect.height) return { x: 0, y: 0 };
+    return {
+      x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+      y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
+    };
+  }, []);
+
+  // Moving and resizing elements with mouse, touch or pen.
   useEffect(() => {
     const onMove = (event) => {
       const interaction = interactionRef.current;
@@ -491,53 +523,36 @@ export default function ForgeEditor({
 
       // Record undo history on the first real movement, not on every click-to-select.
       if (!interaction.moved) {
-        if (Math.abs(event.clientX - interaction.startClient.x) < 2 && Math.abs(event.clientY - interaction.startClient.y) < 2) {
+        if (Math.abs(event.clientX - interaction.startClient.x) < 3 && Math.abs(event.clientY - interaction.startClient.y) < 3) {
           return;
         }
         interaction.moved = true;
         pushHistory(elementsRef.current);
       }
 
+      const start = interaction.startItem;
       setElements(
         elementsRef.current.map((item) => {
-          if (item.id !== interaction.id || item.type === 'textEdit') return item;
+          if (item.id !== interaction.id) return item;
 
           if (interaction.mode === 'drag') {
-            const nextX = clamp(interaction.startBox.x + dx, 0, 1 - item.width);
-            const nextY = clamp(interaction.startBox.y + dy, 0, 1 - item.height);
-            return { ...item, x: nextX, y: nextY };
+            return {
+              ...item,
+              x: clamp(start.x + dx, 0, 1 - start.width),
+              y: clamp(start.y + dy, 0, 1 - start.height),
+            };
           }
 
           if (interaction.mode === 'resize') {
-            const minW = item.type === 'text' ? 0.16 : 0.06;
-            const minH = item.type === 'text' ? 0.05 : 0.06;
-            let nextX = interaction.startBox.x;
-            let nextY = interaction.startBox.y;
-            let nextW = interaction.startBox.width;
-            let nextH = interaction.startBox.height;
+            const keepRatio = keepsRatio(item) !== event.shiftKey;
+            const minW = item.type === 'text' ? 0.06 : 0.01;
+            return { ...item, ...resizeBox(start, interaction.handle, dx, dy, { keepRatio, minW, minH: 0.005 }) };
+          }
 
-            if (interaction.handle.includes('e')) {
-              nextW = clamp(interaction.startBox.width + dx, minW, 1 - interaction.startBox.x);
-            }
-            if (interaction.handle.includes('s')) {
-              nextH = clamp(interaction.startBox.height + dy, minH, 1 - interaction.startBox.y);
-            }
-            if (interaction.handle.includes('w')) {
-              const maxLeftShift = interaction.startBox.width - minW;
-              const raw = clamp(dx, -interaction.startBox.x, maxLeftShift);
-              nextX = interaction.startBox.x + raw;
-              nextW = interaction.startBox.width - raw;
-            }
-            if (interaction.handle.includes('n')) {
-              const maxTopShift = interaction.startBox.height - minH;
-              const raw = clamp(dy, -interaction.startBox.y, maxTopShift);
-              nextY = interaction.startBox.y + raw;
-              nextH = interaction.startBox.height - raw;
-            }
-
-            nextW = clamp(nextW, minW, 1 - nextX);
-            nextH = clamp(nextH, minH, 1 - nextY);
-            return { ...item, x: nextX, y: nextY, width: nextW, height: nextH };
+          if (interaction.mode === 'endpoint') {
+            let point = { x: interaction.startPoint.x + dx, y: interaction.startPoint.y + dy };
+            if (event.shiftKey) point = snapAngle(interaction.otherPoint, point, rect.width / rect.height);
+            return { ...item, ...moveLineEnd(start, interaction.handle, point) };
           }
 
           return item;
@@ -546,7 +561,6 @@ export default function ForgeEditor({
     };
 
     const onUp = () => {
-      if (!interactionRef.current) return;
       interactionRef.current = null;
     };
 
@@ -561,56 +575,6 @@ export default function ForgeEditor({
       window.removeEventListener('pointercancel', onUp);
     };
   }, [pushHistory, setElements]);
-
-  useEffect(() => {
-    const onKeyDown = (event) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-        event.preventDefault();
-        saveDraftNowRef.current();
-        return;
-      }
-      if (isEditableTarget(event.target)) return;
-
-      const key = event.key.toLowerCase();
-      if ((event.metaKey || event.ctrlKey) && (key === 'z' || key === 'y')) {
-        event.preventDefault();
-        if (key === 'y' || event.shiftKey) redo();
-        else undo();
-        return;
-      }
-
-      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId) {
-        event.preventDefault();
-        applyChange((prev) => prev.filter((item) => item.id !== selectedId));
-        setSelectedId(null);
-        setEditingId(null);
-      }
-
-      // Edited lines keep the original line's position.
-      if (!selectedId || elementsRef.current.find((item) => item.id === selectedId)?.type === 'textEdit') return;
-
-      const step = event.shiftKey ? 0.01 : 0.003;
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
-        event.preventDefault();
-        applyChange((prev) =>
-          prev.map((item) => {
-            if (item.id !== selectedId) return item;
-            const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
-            const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
-            return {
-              ...item,
-              x: clamp(item.x + dx, 0, 1 - item.width),
-              y: clamp(item.y + dy, 0, 1 - item.height),
-            };
-          }),
-          { coalesceKey: `nudge:${selectedId}` },
-        );
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [applyChange, redo, selectedId, undo]);
 
   const buildSnapshot = useCallback(
     () => ({
@@ -725,10 +689,19 @@ export default function ForgeEditor({
     event.preventDefault();
     event.stopPropagation();
     setSelectedId(id);
-    setEditingId(null);
+    if (editingId !== id) setEditingId(null);
 
     const target = elementsRef.current.find((item) => item.id === id);
     if (!target || target.type === 'textEdit') return;
+
+    let startPoint = null;
+    let otherPoint = null;
+    if (mode === 'endpoint') {
+      const p1 = { x: target.flipX ? target.x + target.width : target.x, y: target.flipY ? target.y + target.height : target.y };
+      const p2 = { x: target.flipX ? target.x : target.x + target.width, y: target.flipY ? target.y : target.y + target.height };
+      startPoint = handle === 'p1' ? p1 : p2;
+      otherPoint = handle === 'p1' ? p2 : p1;
+    }
 
     interactionRef.current = {
       id,
@@ -736,28 +709,44 @@ export default function ForgeEditor({
       handle,
       moved: false,
       startClient: { x: event.clientX, y: event.clientY },
-      startBox: {
-        x: target.x,
-        y: target.y,
-        width: target.width,
-        height: target.height,
-      },
+      startItem: { ...target },
+      startPoint,
+      otherPoint,
     };
   };
 
+  const updateElement = useCallback((id, updates, { track = true } = {}) => {
+    // Typing or dragging a slider produces one undo step per burst, not per keystroke.
+    const coalesceKey = `${id}:${Object.keys(updates).sort().join(',')}`;
+    applyChange((prev) => prev.map((item) => (item.id === id ? { ...item, ...updates } : item)), { coalesceKey, track });
+  }, [applyChange]);
+
   const updateSelected = (updates) => {
     if (!selectedId) return;
-    // Typing or dragging a slider produces one undo step per burst, not per keystroke.
-    const coalesceKey = `${selectedId}:${Object.keys(updates).sort().join(',')}`;
-    applyChange(
-      (prev) => prev.map((item) => (item.id === selectedId ? { ...item, ...updates } : item)),
-      { coalesceKey },
-    );
+    updateElement(selectedId, updates);
+    // The next element drawn with the same tool uses the style the user just chose.
+    const item = elementsRef.current.find((el) => el.id === selectedId);
+    const toolKey = item?.type === 'ink' ? 'pen' : item?.type === 'mark' ? 'mark' : item?.type === 'shape' ? item.kind : null;
+    const styleKeys = ['color', 'stroke', 'fill', 'strokeWidth', 'opacity'];
+    const styleUpdates = Object.fromEntries(Object.entries(updates).filter(([key]) => styleKeys.includes(key)));
+    if (toolKey && toolStyles[toolKey] && Object.keys(styleUpdates).length) {
+      setToolStyles((prev) => ({ ...prev, [toolKey]: { ...prev[toolKey], ...styleUpdates } }));
+    }
   };
+
+  const autoHeight = useCallback((id, height) => {
+    applyChange((prev) => prev.map((item) => (item.id === id ? { ...item, height } : item)), { track: false });
+  }, [applyChange]);
 
   const updateFormValue = (name, value) => {
     setFormValues((prev) => ({ ...prev, [name]: value }));
   };
+
+  const addElement = useCallback((item, { edit = false } = {}) => {
+    applyChange((prev) => [...prev, item]);
+    setSelectedId(item.id);
+    setEditingId(edit ? item.id : null);
+  }, [applyChange]);
 
   const insertQuickFillText = (value, options = {}) => {
     const text = String(value || '').trim();
@@ -785,25 +774,19 @@ export default function ForgeEditor({
     const pageItemCount = elements.filter((item) => item.pageIndex === currentPage - 1).length;
     const y = clamp(0.12 + pageItemCount * 0.045, 0.08, 0.9);
 
-    const item = {
-      ...createTextElement(currentPage - 1),
+    addElement(createText(currentPage - 1, {
       text,
-      x: options.x ?? 0.12,
-      y: options.y ?? y,
+      x: 0.12,
+      y,
       width: options.width ?? 0.36,
-      height: options.height ?? 0.07,
-      fontSize: options.fontSize ?? 0.026,
+      height: 0.04,
       quickFillKey,
-    };
-    applyChange((prev) => [...prev, item]);
-    setSelectedId(item.id);
-    setEditingId(item.id);
+    }), { edit: true });
   };
 
   const applyQuickFormValue = (name, kind) => {
     if (kind === 'date') {
-      const dateValue = new Date().toLocaleDateString();
-      updateFormValue(name, dateValue);
+      updateFormValue(name, new Date().toLocaleDateString());
       return;
     }
     if (kind === 'initials') {
@@ -811,25 +794,51 @@ export default function ForgeEditor({
     }
   };
 
-  const removeSelected = () => {
-    if (!selectedId) return;
-    applyChange((prev) => prev.filter((item) => item.id !== selectedId));
+  const removeElement = useCallback((id, { track = true } = {}) => {
+    applyChange((prev) => prev.filter((item) => item.id !== id), { track });
     setEditingId(null);
-    setSelectedId(null);
+    setSelectedId((prev) => (prev === id ? null : prev));
+  }, [applyChange]);
+
+  const removeSelected = () => {
+    if (selectedId) removeElement(selectedId);
   };
 
+  const cloneElement = (source, overrides = {}) => ({
+    ...source,
+    id: makeId(),
+    file: null,
+    objectUrl: null,
+    quickFillKey: null,
+    ...overrides,
+  });
+
   const duplicateSelected = () => {
-    if (!selectedElement) return;
-    const copy = {
-      ...selectedElement,
-      id: makeId(),
-      file: null,
-      objectUrl: null,
+    if (!selectedElement || selectedElement.type === 'textEdit') return;
+    const copy = cloneElement(selectedElement, {
       x: clamp(selectedElement.x + 0.02, 0, 1 - selectedElement.width),
       y: clamp(selectedElement.y + 0.02, 0, 1 - selectedElement.height),
-    };
-    applyChange((prev) => [...prev, copy]);
-    setSelectedId(copy.id);
+    });
+    addElement(copy);
+  };
+
+  const copyToAllPages = () => {
+    if (!selectedElement || selectedElement.type === 'textEdit' || numPages < 2) return;
+    const copies = [];
+    for (let page = 0; page < numPages; page += 1) {
+      if (page !== selectedElement.pageIndex) copies.push(cloneElement(selectedElement, { pageIndex: page }));
+    }
+    applyChange((prev) => [...prev, ...copies]);
+  };
+
+  const reorderSelected = (direction) => {
+    if (!selectedId) return;
+    applyChange((prev) => {
+      const item = prev.find((el) => el.id === selectedId);
+      if (!item) return prev;
+      const rest = prev.filter((el) => el.id !== selectedId);
+      return direction === 'front' ? [...rest, item] : [item, ...rest];
+    });
   };
 
   const clearPage = () => {
@@ -844,19 +853,10 @@ export default function ForgeEditor({
     setEditingId(null);
   };
 
-  const addText = () => {
-    const item = createTextElement(currentPage - 1);
-    applyChange((prev) => [...prev, item]);
-    setSelectedId(item.id);
-    setEditingId(item.id);
-  };
-
   const startLineEdit = (line) => {
     const pageIndex = currentPage - 1;
     const item = createTextEdit({ id: makeId(), line, pageIndex, pageWidth: layouts[pageIndex]?.width || 612 });
-    applyChange((prev) => [...prev, item]);
-    setSelectedId(item.id);
-    setEditingId(item.id);
+    addElement(item, { edit: true });
   };
 
   // Opening a line without changing it is not an edit, but it stays while selected so the
@@ -869,73 +869,111 @@ export default function ForgeEditor({
     }
   }, [applyChange, editingId, selectedId]);
 
-  const addImage = async ({ file, isSignature = false, url, storagePath, assetBucket, mimeType, signatureId }) => {
-    const item = createImageElement({
+  /** Box for an image of the given proportions (height / width), centered on `at` or the page. */
+  const imageBox = useCallback((ratio, width, at) => {
+    let w = width;
+    let h = w * ratio * aspect;
+    if (h > 0.85) {
+      w *= 0.85 / h;
+      h = 0.85;
+    }
+    const cx = at?.x ?? 0.5;
+    const cy = at?.y ?? 0.45;
+    return { x: clamp(cx - w / 2, 0, 1 - w), y: clamp(cy - h / 2, 0, 1 - h), width: w, height: h };
+  }, [aspect]);
+
+  const placeImage = useCallback((payload, at) => {
+    const item = createImage({
+      ...payload,
       pageIndex: currentPage - 1,
-      isSignature,
-      file,
-      url,
-      storagePath,
-      assetBucket,
-      mimeType,
-      signatureId,
+      box: imageBox(payload.ratio || 0.4, payload.isSignature ? 0.24 : 0.34, at),
     });
-    applyChange((prev) => [...prev, item]);
-    setSelectedId(item.id);
+    addElement(item);
+  }, [addElement, currentPage, imageBox]);
+
+  /** Signatures and images are placed by clicking on the page (or "Place in center"). */
+  const beginPlacement = useCallback(async (payload) => {
+    let ratio = 0.4;
+    try {
+      const { width, height } = await imageSize(payload.url);
+      if (width && height) ratio = height / width;
+    } catch {
+      // Keep the default proportions.
+    }
+    setPlacement({ ...payload, ratio });
+    setToolState('place');
+    setSelectedId(null);
+    setEditingId(null);
+    setLeftOpen(false);
+  }, []);
+
+  const persistImage = async (original) => {
+    const file = await prepareImageForUpload(original);
+    const persisted = await onUploadOverlay(file);
+    return {
+      file,
+      url: persisted?.url,
+      storagePath: persisted?.storagePath,
+      assetBucket: persisted?.assetBucket,
+      mimeType: persisted?.mimeType || file.type,
+    };
   };
 
-  const handleImageInput = async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
+  const insertImageFile = async (file, at) => {
     if (!file || !file.type.startsWith('image/')) return;
-
     setBusy(true);
     try {
-      const persisted = await onUploadOverlay(file);
-      await addImage({
-        file,
-        isSignature: false,
-        url: persisted?.url,
-        storagePath: persisted?.storagePath,
-        assetBucket: persisted?.assetBucket,
-        mimeType: persisted?.mimeType,
-      });
+      const payload = await persistImage(file);
+      if (at === undefined) {
+        await beginPlacement(payload);
+      } else {
+        const { width, height } = await imageSize(payload.url).catch(() => ({ width: 10, height: 4 }));
+        placeImage({ ...payload, ratio: height / width }, at);
+      }
       setSaveError('');
     } catch (error) {
-      setSaveError(error.message || 'Failed to upload image asset.');
+      setSaveError(error.message || 'Failed to upload image.');
     } finally {
       setBusy(false);
     }
   };
 
-  const handleSignatureInput = async (event) => {
-    const rawFile = event.target.files?.[0];
+  const handleImageInput = (event) => {
+    const file = event.target.files?.[0];
     event.target.value = '';
-    if (!rawFile) return;
+    insertImageFile(file);
+  };
 
-    setBusy(true);
-    try {
-      const processed = await removeWhiteBackground(rawFile).catch(() => rawFile);
-      const saved = await onCreateSignature(processed, signatureName.trim() || undefined);
-      setSignatureName('');
-      await addImage({
+  const openSignature = (mode) => {
+    if (mode === 'saved') {
+      setLeftTab('signatures');
+      setLeftOpen(true);
+      return;
+    }
+    setSignatureDialog(mode);
+  };
+
+  const createSignature = async ({ file, name, save, kind }) => {
+    let payload;
+    if (save) {
+      const saved = await onCreateSignature(file, name, kind);
+      payload = {
         isSignature: true,
         url: saved.url,
         storagePath: saved.image_path,
         assetBucket: 'signatures',
         mimeType: saved.mime_type,
         signatureId: saved.id,
-      });
-      setSaveError('');
-    } catch (error) {
-      setSaveError(error.message || 'Failed to save signature.');
-    } finally {
-      setBusy(false);
+      };
+    } else {
+      payload = { ...(await persistImage(file)), isSignature: true };
     }
+    setSignatureDialog(null);
+    await beginPlacement(payload);
   };
 
-  const addSavedSignature = async (signature) => {
-    await addImage({
+  const placeSavedSignature = (signature) => {
+    beginPlacement({
       isSignature: true,
       url: signature.url,
       storagePath: signature.image_path,
@@ -945,18 +983,257 @@ export default function ForgeEditor({
     });
   };
 
+  const markRedactions = (matches) => {
+    const pad = 0.002;
+    const items = matches.map((match) => ({
+      id: makeId(),
+      type: 'redact',
+      pageIndex: match.page,
+      x: clamp(match.x - pad, 0, 1),
+      y: clamp(match.y - pad, 0, 1),
+      width: Math.min(match.width + pad * 2, 1),
+      height: Math.min(match.height + pad * 2, 1),
+    }));
+    applyChange((prev) => [...prev, ...items]);
+    if (items[0]) setCurrentPage(items[0].pageIndex + 1);
+    setLeftOpen(false);
+  };
+
+  // ---------- Creating things by clicking or dragging on the page ----------
+
+  const finishDrawing = (stroke, shiftKey) => {
+    const { tool: active, start, current, points } = stroke;
+    const pageIndex = currentPage - 1;
+    const dxPx = Math.abs(current.x - start.x) * renderSize.width;
+    const dyPx = Math.abs(current.y - start.y) * renderSize.height;
+    const tiny = dxPx < 4 && dyPx < 4;
+
+    if (active === 'pen') {
+      const style = toolStyles.pen;
+      const px = points.map((p) => [p.x * renderSize.width, p.y * renderSize.height]);
+      const simplified = simplifyPoints(px, 0.5).map(([x, y]) => ({ x: x / renderSize.width, y: y / renderSize.height }));
+      const now = Date.now();
+      const last = lastInkRef.current;
+      const previous = last && now - last.at < INK_MERGE_MS ? elementsRef.current.find((el) => el.id === last.id && el.pageIndex === pageIndex) : null;
+
+      // Absolute page points of every stroke, so a merged drawing gets one box around all.
+      const strokes = [];
+      if (previous) {
+        for (const s of previous.strokes) {
+          const abs = [];
+          for (let i = 0; i < s.points.length; i += 2) {
+            abs.push({ x: previous.x + s.points[i] * previous.width, y: previous.y + s.points[i + 1] * previous.height });
+          }
+          strokes.push(abs);
+        }
+      }
+      strokes.push(simplified);
+      const all = strokes.flat();
+      const padX = style.strokeWidth / 2;
+      const padY = padX * aspect;
+      const minX = clamp(Math.min(...all.map((p) => p.x)) - padX, 0, 1);
+      const minY = clamp(Math.min(...all.map((p) => p.y)) - padY, 0, 1);
+      const maxX = clamp(Math.max(...all.map((p) => p.x)) + padX, 0, 1);
+      const maxY = clamp(Math.max(...all.map((p) => p.y)) + padY, 0, 1);
+      const width = Math.max(maxX - minX, 0.002);
+      const height = Math.max(maxY - minY, 0.002);
+      const relative = strokes.map((s) => ({ points: s.flatMap((p) => [(p.x - minX) / width, (p.y - minY) / height]) }));
+      const box = { x: minX, y: minY, width, height, strokes: relative };
+
+      if (previous) {
+        applyChange((prev) => prev.map((el) => (el.id === previous.id ? { ...el, ...box } : el)));
+        lastInkRef.current = { id: previous.id, at: now };
+      } else {
+        const item = { id: makeId(), type: 'ink', pageIndex, ...box, color: style.color, strokeWidth: style.strokeWidth, opacity: style.opacity ?? 1 };
+        applyChange((prev) => [...prev, item]);
+        lastInkRef.current = { id: item.id, at: now };
+      }
+      return;
+    }
+
+    if (active === 'place') {
+      setTool('select');
+      if (placement) placeImage(placement, current);
+      return;
+    }
+
+    if (active === 'text') {
+      const width = tiny ? Math.min(0.34, 1 - current.x) : Math.max(Math.abs(current.x - start.x), 0.08);
+      const x = tiny ? clamp(current.x - 0.004, 0, 1 - Math.max(width, 0.08)) : Math.min(start.x, current.x);
+      const y = clamp(tiny ? current.y - 0.015 : Math.min(start.y, current.y), 0, 0.97);
+      // Switching back to Select keeps the new box selected and in typing mode.
+      setTool('select');
+      addElement(createText(pageIndex, { x, y, width: Math.max(width, 0.08), height: 0.04 }), { edit: true });
+      return;
+    }
+
+    // Sticky tools keep marking; the rest hand over to Select with the new item selected.
+    const commit = (item) => {
+      addElement(item);
+      if (STICKY_TOOLS.has(active)) setSelectedId(null);
+      else setTool('select');
+    };
+
+    if (active === 'check' || active === 'cross' || active === 'dot') {
+      const width = 0.032;
+      const height = width * aspect;
+      commit({
+        id: makeId(),
+        type: 'mark',
+        kind: active,
+        pageIndex,
+        x: clamp(current.x - width / 2, 0, 1 - width),
+        y: clamp(current.y - height / 2, 0, 1 - height),
+        width,
+        height,
+        color: toolStyles.mark.color,
+      });
+      return;
+    }
+
+    if (active === 'line' || active === 'arrow') {
+      let end = current;
+      if (tiny) end = { x: clamp(start.x + 0.2, 0, 1), y: start.y };
+      else if (shiftKey) end = snapAngle(start, current, aspect);
+      const style = toolStyles[active];
+      commit({ id: makeId(), type: 'shape', kind: active, pageIndex, ...lineFromPoints(start, end), stroke: style.stroke, fill: null, strokeWidth: style.strokeWidth, opacity: style.opacity ?? 1 });
+      return;
+    }
+
+    // Box tools: rectangle, ellipse, highlight, whiteout, redact.
+    let box;
+    if (tiny) {
+      if (active !== 'rect' && active !== 'ellipse') return;
+      const w = 0.18;
+      const h = active === 'ellipse' ? w * aspect : 0.1;
+      box = { x: clamp(current.x - w / 2, 0, 1 - w), y: clamp(current.y - h / 2, 0, 1 - h), width: w, height: h };
+    } else {
+      let w = Math.abs(current.x - start.x);
+      let h = Math.abs(current.y - start.y);
+      if (shiftKey && (active === 'rect' || active === 'ellipse')) {
+        const side = Math.max(w, h * aspect);
+        w = side;
+        h = side / aspect;
+      }
+      const x = current.x < start.x ? start.x - w : start.x;
+      const y = current.y < start.y ? start.y - h : start.y;
+      box = { x: clamp(x, 0, 1), y: clamp(y, 0, 1), width: Math.min(w, 1 - clamp(x, 0, 1)), height: Math.min(h, 1 - clamp(y, 0, 1)) };
+    }
+
+    if (active === 'redact') {
+      commit({ id: makeId(), type: 'redact', pageIndex, ...box });
+      return;
+    }
+    const style = toolStyles[active === 'highlight' ? 'highlight' : active === 'whiteout' ? 'whiteout' : active];
+    const item = {
+      id: makeId(),
+      type: 'shape',
+      kind: active,
+      pageIndex,
+      ...box,
+      stroke: active === 'rect' || active === 'ellipse' ? style.stroke : null,
+      fill: style.fill ?? null,
+      strokeWidth: style.strokeWidth ?? 0.003,
+      opacity: active === 'whiteout' ? 1 : style.opacity ?? 1,
+      flipX: false,
+      flipY: false,
+    };
+    commit(item);
+  };
+
+  const onDrawStart = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = pointFromEvent(event);
+    drawRef.current = { tool, start: point, current: point, points: [point], pointerId: event.pointerId };
+    setDraft({ ...drawRef.current });
+  };
+
+  const onDrawMove = (event) => {
+    const stroke = drawRef.current;
+    if (!stroke) {
+      if (tool === 'place') setHoverPoint(pointFromEvent(event));
+      return;
+    }
+    if (stroke.tool === 'pen') {
+      const events = event.nativeEvent.getCoalescedEvents?.() || [event.nativeEvent];
+      for (const e of events) stroke.points.push(pointFromEvent(e));
+    }
+    stroke.current = pointFromEvent(event);
+    setDraft({ ...stroke, shiftKey: event.shiftKey });
+  };
+
+  const onDrawEnd = (event) => {
+    const stroke = drawRef.current;
+    drawRef.current = null;
+    setDraft(null);
+    if (!stroke) return;
+    stroke.current = pointFromEvent(event);
+    finishDrawing(stroke, event.shiftKey);
+  };
+
+  const cancelDrawing = () => {
+    drawRef.current = null;
+    setDraft(null);
+  };
+
+  /** What the in-progress stroke or box would become, for the live preview. */
+  const draftPreview = useMemo(() => {
+    if (!draft) return null;
+    const { tool: active, start, current, points, shiftKey } = draft;
+    if (active === 'pen') {
+      return { kind: 'pen', points };
+    }
+    if (active === 'line' || active === 'arrow') {
+      const end = shiftKey ? snapAngle(start, current, aspect) : current;
+      return { kind: 'shape', item: { type: 'shape', kind: active, ...lineFromPoints(start, end), stroke: toolStyles[active].stroke, strokeWidth: toolStyles[active].strokeWidth, opacity: 1 } };
+    }
+    if (['rect', 'ellipse', 'highlight', 'whiteout', 'redact', 'text'].includes(active)) {
+      let w = Math.abs(current.x - start.x);
+      let h = Math.abs(current.y - start.y);
+      if (shiftKey && (active === 'rect' || active === 'ellipse')) {
+        const side = Math.max(w, h * aspect);
+        w = side;
+        h = side / aspect;
+      }
+      const box = { x: current.x < start.x ? start.x - w : start.x, y: current.y < start.y ? start.y - h : start.y, width: w, height: h };
+      if (active === 'text') return { kind: 'box', box };
+      if (active === 'redact') return { kind: 'shape', item: { type: 'redact', ...box } };
+      const style = toolStyles[active];
+      return {
+        kind: 'shape',
+        item: {
+          type: 'shape',
+          kind: active,
+          ...box,
+          stroke: active === 'rect' || active === 'ellipse' ? style.stroke : null,
+          fill: style.fill ?? null,
+          strokeWidth: style.strokeWidth ?? 0.003,
+          opacity: active === 'whiteout' ? 1 : style.opacity ?? 1,
+        },
+      };
+    }
+    return null;
+  }, [aspect, draft, toolStyles]);
+
+  // ---------- Export ----------
+
   const baseName = stripExtension(documentTitle);
 
-  const renderEditedPdf = async () => {
+  const renderEditedPdf = async ({ flattenForm = false } = {}) => {
     const warnings = new Set();
     const onWarning = (message) => warnings.add(message);
-    // Text already in the PDF is rewritten by the backend first; overlays go on top of that.
+    // Text already in the PDF is rewritten, and redacted content removed, by the server first;
+    // additions go on top of that.
     const textEdits = elements.filter((item) => item.type === 'textEdit' && isChangedTextEdit(item));
+    const redactions = elements.filter((item) => item.type === 'redact');
     let pdfBytes;
-    if (textEdits.length) {
-      setExportNotice('Applying text edits…');
+    if (textEdits.length || redactions.length) {
+      setExportNotice(redactions.length ? 'Removing redacted content…' : 'Applying text edits…');
       try {
-        pdfBytes = await applyTextEdits({ pdfFile, edits: textEdits, onWarning });
+        pdfBytes = await applyServerEdits({ pdfFile, edits: textEdits, redactions, onWarning });
       } finally {
         setExportNotice('');
       }
@@ -967,6 +1244,7 @@ export default function ForgeEditor({
       pdfBytes,
       elements: elements.filter((item) => item.type !== 'textEdit'),
       formValues,
+      flattenForm,
       onWarning,
     });
     setSaveError(warnings.size ? [...warnings].join(' ') : '');
@@ -981,14 +1259,15 @@ export default function ForgeEditor({
     } catch (error) {
       console.error('Export failed:', error);
       setSaveError(`Export failed: ${error.message || 'unknown error'}`);
+      setRightOpen(true);
     } finally {
       setBusy(false);
     }
   };
 
-  const exportPdf = () =>
+  const exportPdf = (options) =>
     runExport(async () => {
-      downloadPdfBytes(await renderEditedPdf(), `${baseName}-edited.pdf`);
+      downloadPdfBytes(await renderEditedPdf(options), `${baseName}${redactionCount ? '-redacted' : '-edited'}.pdf`);
     });
 
   const exportImage = (format) =>
@@ -1000,24 +1279,175 @@ export default function ForgeEditor({
   const hasElements = elements.length > 0;
   // Fit the page to the available canvas width (minus padding), then apply zoom.
   const canvasPadding = containerWidth < 640 ? 24 : 64;
-  const fitWidth = clamp(containerWidth - canvasPadding, 280, 900);
+  const fitWidth = clamp(containerWidth - canvasPadding, 260, 900);
   const targetWidth = Math.floor(fitWidth * zoom);
   const countByPage = elements.reduce((acc, item) => {
     acc[item.pageIndex] = (acc[item.pageIndex] || 0) + 1;
     return acc;
   }, {});
 
-  const goToPage = (page) => {
+  const goToPage = useCallback((page) => {
     setCurrentPage(clamp(page, 1, numPages || 1));
     setSelectedId(null);
     setEditingId(null);
     setLeftOpen(false);
+    lastInkRef.current = null;
+  }, [numPages]);
+
+  // ---------- Keyboard and clipboard ----------
+
+  const pasteElement = () => {
+    const clip = clipboardRef.current;
+    if (!clip) return;
+    const sameSpot = clip.pageIndex !== currentPage - 1;
+    const copy = cloneElement(clip.item, {
+      pageIndex: currentPage - 1,
+      x: sameSpot ? clip.item.x : clamp(clip.item.x + 0.02, 0, 1 - clip.item.width),
+      y: sameSpot ? clip.item.y : clamp(clip.item.y + 0.02, 0, 1 - clip.item.height),
+    });
+    clipboardRef.current = { item: copy, pageIndex: currentPage - 1 };
+    addElement(copy);
   };
 
-  const openSignatures = () => {
-    setLeftTab('signatures');
-    setLeftOpen(true);
-  };
+  useEffect(() => {
+    keyHandlerRef.current = (event) => {
+      const mod = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      if (mod && key === 's') {
+        event.preventDefault();
+        saveDraftNowRef.current();
+        return;
+      }
+      if (mod && (key === '=' || key === '+')) {
+        event.preventDefault();
+        zoomBy(0.1);
+        return;
+      }
+      if (mod && key === '-') {
+        event.preventDefault();
+        zoomBy(-0.1);
+        return;
+      }
+      if (mod && key === '0') {
+        event.preventDefault();
+        setZoom(1);
+        return;
+      }
+      if (isEditableTarget(event.target) || signatureDialog || shortcutsOpen) return;
+
+      if (mod && (key === 'z' || key === 'y')) {
+        event.preventDefault();
+        if (key === 'y' || event.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (mod && key === 'd') {
+        event.preventDefault();
+        duplicateSelected();
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (drawRef.current) cancelDrawing();
+        else if (tool !== 'select') setTool('select');
+        else {
+          setSelectedId(null);
+          setEditingId(null);
+        }
+        return;
+      }
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId) {
+        event.preventDefault();
+        removeSelected();
+        return;
+      }
+      if (event.key === 'PageDown' || event.key === 'PageUp') {
+        event.preventDefault();
+        goToPage(currentPage + (event.key === 'PageDown' ? 1 : -1));
+        return;
+      }
+      if (event.key === '?') {
+        setShortcutsOpen(true);
+        return;
+      }
+      if (!mod && !event.altKey && !event.shiftKey && key.length === 1) {
+        if (TOOL_KEYS[key]) {
+          setTool(TOOL_KEYS[key]);
+          return;
+        }
+        if (key === 's') {
+          openSignature('signature');
+          return;
+        }
+      }
+
+      // Edited lines keep the original line's position.
+      if (!selectedId || selectedElement?.type === 'textEdit') return;
+      const step = event.shiftKey ? 0.01 : 0.002;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        event.preventDefault();
+        applyChange(
+          (prev) =>
+            prev.map((item) => {
+              if (item.id !== selectedId) return item;
+              const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
+              const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
+              return {
+                ...item,
+                x: clamp(item.x + dx, 0, 1 - item.width),
+                y: clamp(item.y + dy, 0, 1 - item.height),
+              };
+            }),
+          { coalesceKey: `nudge:${selectedId}` },
+        );
+      }
+    };
+
+    clipboardHandlersRef.current = {
+      copy: (event, cut) => {
+        if (isEditableTarget(event.target) || !selectedElement || selectedElement.type === 'textEdit') return;
+        clipboardRef.current = { item: { ...selectedElement }, pageIndex: selectedElement.pageIndex };
+        event.clipboardData?.setData('text/plain', CLIP_MARKER);
+        event.preventDefault();
+        if (cut) removeSelected();
+      },
+      paste: (event) => {
+        if (isEditableTarget(event.target) || signatureDialog) return;
+        const files = Array.from(event.clipboardData?.files || []).filter((file) => file.type.startsWith('image/'));
+        if (files.length) {
+          event.preventDefault();
+          insertImageFile(files[0], null);
+          return;
+        }
+        const text = event.clipboardData?.getData('text/plain') || '';
+        if (text === CLIP_MARKER && clipboardRef.current) {
+          event.preventDefault();
+          pasteElement();
+          return;
+        }
+        if (text.trim()) {
+          event.preventDefault();
+          addElement(createText(currentPage - 1, { text: text.slice(0, 5000), x: 0.12, y: 0.12, width: 0.5 }));
+        }
+      },
+    };
+  });
+
+  useEffect(() => {
+    const onKeyDown = (event) => keyHandlerRef.current?.(event);
+    const onCopy = (event) => clipboardHandlersRef.current?.copy(event, false);
+    const onCut = (event) => clipboardHandlersRef.current?.copy(event, true);
+    const onPaste = (event) => clipboardHandlersRef.current?.paste(event);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('copy', onCopy);
+    window.addEventListener('cut', onCut);
+    window.addEventListener('paste', onPaste);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('copy', onCopy);
+      window.removeEventListener('cut', onCut);
+      window.removeEventListener('paste', onPaste);
+    };
+  }, []);
 
   const saveLabel = {
     saved: 'Saved',
@@ -1026,19 +1456,193 @@ export default function ForgeEditor({
     error: 'Save failed — retry',
   }[saveStatus];
 
-  const TEXT_COLORS = ['#111827', '#1d4ed8', '#b91c1c', '#047857'];
+  const toolHint = {
+    text: 'Click where the text should go, or drag to set its width.',
+    pen: 'Draw on the page. Strokes made in quick succession join into one drawing.',
+    highlight: 'Drag across text to highlight it.',
+    rect: 'Drag to draw a rectangle. Hold Shift for a square.',
+    ellipse: 'Drag to draw an ellipse. Hold Shift for a circle.',
+    line: 'Drag to draw a line. Hold Shift for straight angles.',
+    arrow: 'Drag to draw an arrow. Hold Shift for straight angles.',
+    whiteout: 'Drag over content to cover it with white.',
+    redact: 'Drag over anything to remove it for good when you download.',
+    check: 'Click to place a check mark.',
+    cross: 'Click to place a cross.',
+    dot: 'Click to place a dot.',
+    place: placement?.isSignature ? 'Click where your signature goes.' : 'Click where the image goes.',
+  }[tool];
+
+  const showCanvasStatus = Boolean(exportNotice || textMode || toolHint);
+  const drawCursor = tool === 'text' ? 'text' : tool === 'place' ? 'copy' : 'crosshair';
+
+  const renderItem = (item) => {
+    const isSelected = selectedId === item.id;
+    const style = {
+      left: `${item.x * 100}%`,
+      top: `${item.y * 100}%`,
+      width: `${item.width * 100}%`,
+      height: `${item.height * 100}%`,
+    };
+
+    if (item.type === 'textEdit') {
+      const isEditing = editingId === item.id;
+      const changed = isChangedTextEdit(item);
+      const fontPx = (item.size / item.pageWidth) * renderSize.width;
+      const textStyle = {
+        left: (item.original.originX - item.x) * renderSize.width,
+        // line-height 1 puts the baseline about 0.78em below the top for most fonts.
+        top: (item.original.baseline - item.y) * renderSize.height - fontPx * 0.78,
+        color: item.color,
+        fontSize: `${fontPx}px`,
+        fontWeight: item.bold ? 700 : 400,
+        fontStyle: item.italic ? 'italic' : 'normal',
+        fontFamily: previewFontFamily(item),
+      };
+      return (
+        <div
+          key={item.id}
+          className={`item text-edit ${isSelected ? 'selected' : ''}`}
+          style={{ ...style, background: changed || isEditing ? item.original.background : 'transparent' }}
+          onPointerDown={(event) => startInteraction(event, item.id, 'drag')}
+          onDoubleClick={() => {
+            setSelectedId(item.id);
+            setEditingId(item.id);
+          }}
+        >
+          {isEditing ? (
+            <input
+              autoFocus
+              value={item.text}
+              onChange={(event) => updateElement(item.id, { text: event.target.value })}
+              onBlur={() => setEditingId(null)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
+              }}
+              className="text-edit-input"
+              style={textStyle}
+              aria-label="Edit text"
+            />
+          ) : changed ? (
+            <span className="text-edit-text" style={textStyle}>{item.text}</span>
+          ) : null}
+
+          {isSelected && !isEditing ? (
+            <div className="item-toolbar" onPointerDown={(event) => event.stopPropagation()}>
+              <button type="button" onClick={() => setEditingId(item.id)} aria-label="Edit text" title="Edit text">
+                <Type size={14} />
+              </button>
+              <button type="button" onClick={removeSelected} aria-label="Revert to original" title="Revert to original">
+                <RotateCcw size={14} />
+              </button>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    const line = isLine(item);
+    const kindClass = item.type === 'text' ? 'text-item' : item.type === 'image' ? 'image-item' : `vector-item ${item.type}-item ${item.kind ? `kind-${item.kind}` : ''}`;
+    const editing = editingId === item.id;
+    const widthPx = item.width * renderSize.width;
+    const heightPx = item.height * renderSize.height;
+
+    return (
+      <div
+        key={item.id}
+        className={`item ${isSelected ? 'selected' : ''} ${kindClass} ${line ? 'line-item' : ''}`}
+        style={style}
+        onPointerDown={(event) => startInteraction(event, item.id, 'drag')}
+        onDoubleClick={() => {
+          if (item.type === 'text') {
+            setSelectedId(item.id);
+            setEditingId(item.id);
+          }
+        }}
+      >
+        {item.type === 'text' ? (
+          <TextBox
+            item={item}
+            editing={editing}
+            size={renderSize}
+            onText={(text) => updateElement(item.id, { text })}
+            onAutoHeight={autoHeight}
+            onDone={() => {
+              setEditingId(null);
+              const current = elementsRef.current.find((el) => el.id === item.id);
+              if (current && !current.text.trim()) removeElement(item.id, { track: false });
+            }}
+          />
+        ) : item.type === 'image' ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={item.url} alt={item.isSignature ? 'Signature' : 'Image'} draggable={false} style={{ opacity: item.opacity ?? 1 }} />
+        ) : (
+          <ElementGraphic item={item} width={widthPx} height={heightPx} pageWidth={renderSize.width} />
+        )}
+        {item.type === 'redact' ? <span className="redact-label" aria-hidden="true">Redact</span> : null}
+
+        {isSelected && !editing ? (
+          <div className="item-toolbar" onPointerDown={(event) => event.stopPropagation()}>
+            {item.type === 'text' ? (
+              <button type="button" onClick={() => setEditingId(item.id)} aria-label="Edit text" title="Edit text">
+                <Type size={14} />
+              </button>
+            ) : null}
+            <button type="button" onClick={duplicateSelected} aria-label="Duplicate" title="Duplicate (⌘D)">
+              <Copy size={14} />
+            </button>
+            {numPages > 1 ? (
+              <button type="button" onClick={copyToAllPages} aria-label="Copy to all pages" title="Copy to all pages">
+                <Files size={14} />
+              </button>
+            ) : null}
+            <button type="button" onClick={removeSelected} aria-label="Delete" title="Delete (Del)">
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ) : null}
+
+        {isSelected && !line
+          ? ['nw', 'ne', 'sw', 'se'].map((handle) => (
+            <button
+              key={handle}
+              type="button"
+              className={`resize-handle ${handle}`}
+              onPointerDown={(event) => startInteraction(event, item.id, 'resize', handle)}
+              aria-label="Resize"
+            />
+          ))
+          : null}
+        {isSelected && line
+          ? ['p1', 'p2'].map((handle) => {
+            const atEnd = handle === 'p2';
+            const right = atEnd !== Boolean(item.flipX);
+            const bottom = atEnd !== Boolean(item.flipY);
+            return (
+              <button
+                key={handle}
+                type="button"
+                className="endpoint-handle"
+                style={{ left: right ? '100%' : '0%', top: bottom ? '100%' : '0%' }}
+                onPointerDown={(event) => startInteraction(event, item.id, 'endpoint', handle)}
+                aria-label={atEnd ? 'Move end point' : 'Move start point'}
+              />
+            );
+          })
+          : null}
+      </div>
+    );
+  };
 
   return (
     <div className="editor">
       <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleImageInput} />
-      <input ref={signatureInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleSignatureInput} />
 
       <header className="editor-bar">
         <div className="editor-bar-left">
           <button type="button" className="btn btn-ghost btn-icon" onClick={leaveAfterSave(onBackToDashboard)} aria-label="Back to dashboard" title="Back to dashboard">
             <ArrowLeft size={18} />
           </button>
-          <button type="button" className="btn btn-ghost btn-icon drawer-only" onClick={() => setLeftOpen((v) => !v)} aria-label="Pages and signatures">
+          <button type="button" className="btn btn-ghost btn-icon drawer-only" onClick={() => setLeftOpen((v) => !v)} aria-label="Pages, signatures and redaction">
             <PanelLeft size={18} />
           </button>
           <div className="editor-title">
@@ -1055,43 +1659,15 @@ export default function ForgeEditor({
           </div>
         </div>
 
-        <div className="editor-bar-center">
-          <div className="tool-group" role="toolbar" aria-label="Insert">
-            <button
-              type="button"
-              className={`btn btn-ghost ${textMode ? 'is-active' : ''}`}
-              onClick={() => setTextMode((value) => !value)}
-              aria-pressed={textMode}
-              title="Edit text already in the PDF"
-            >
-              <ScanText size={16} /> <span className="hide-sm">Edit text</span>
-            </button>
-            <button type="button" className="btn btn-ghost" onClick={addText} title="Add text">
-              <Type size={16} /> <span className="hide-sm">Text</span>
-            </button>
-            <button type="button" className="btn btn-ghost" onClick={() => imageInputRef.current?.click()} disabled={busy} title="Add image">
-              <ImagePlus size={16} /> <span className="hide-sm">Image</span>
-            </button>
-            <button type="button" className="btn btn-ghost" onClick={openSignatures} disabled={busy} title="Add signature">
-              <Signature size={16} /> <span className="hide-sm">Sign</span>
-            </button>
-          </div>
-          <span className="bar-sep" />
-          <button type="button" className="btn btn-ghost btn-icon" onClick={undo} disabled={!historyFlags.canUndo} aria-label="Undo" title="Undo (⌘Z)">
-            <Undo2 size={17} />
-          </button>
-          <button type="button" className="btn btn-ghost btn-icon" onClick={redo} disabled={!historyFlags.canRedo} aria-label="Redo" title="Redo (⇧⌘Z)">
-            <Redo2 size={17} />
-          </button>
-        </div>
-
         <div className="editor-bar-right">
           <div className="zoom-control hide-sm">
-            <button type="button" className="btn btn-ghost btn-icon" onClick={() => setZoom((z) => clamp(Math.round((z - 0.1) * 10) / 10, 0.5, 2))} aria-label="Zoom out">
+            <button type="button" className="btn btn-ghost btn-icon" onClick={() => zoomBy(-0.1)} aria-label="Zoom out" title="Zoom out (⌘−)">
               <ZoomOut size={16} />
             </button>
-            <span>{Math.round(zoom * 100)}%</span>
-            <button type="button" className="btn btn-ghost btn-icon" onClick={() => setZoom((z) => clamp(Math.round((z + 0.1) * 10) / 10, 0.5, 2))} aria-label="Zoom in">
+            <button type="button" className="zoom-value" onClick={() => setZoom(1)} title="Fit to width (⌘0)">
+              {Math.round(zoom * 100)}%
+            </button>
+            <button type="button" className="btn btn-ghost btn-icon" onClick={() => zoomBy(0.1)} aria-label="Zoom in" title="Zoom in (⌘+)">
               <ZoomIn size={16} />
             </button>
             <button type="button" className="btn btn-ghost btn-icon" onClick={() => setZoom(1)} aria-label="Fit to width" title="Fit to width">
@@ -1109,15 +1685,23 @@ export default function ForgeEditor({
             )}
           >
             <div className="menu-label">Export</div>
-            <button type="button" role="menuitem" className="menu-item" onClick={exportPdf}>
+            <button type="button" role="menuitem" className="menu-item" onClick={() => exportPdf()}>
               <Download size={16} /> PDF document
             </button>
+            {formFields.length ? (
+              <button type="button" role="menuitem" className="menu-item" onClick={() => exportPdf({ flattenForm: true })}>
+                <FileCheck2 size={16} /> PDF, form locked <small>flattened</small>
+              </button>
+            ) : null}
             <button type="button" role="menuitem" className="menu-item" onClick={() => exportImage('png')}>
               <FileImage size={16} /> PNG image <small>page {currentPage}</small>
             </button>
             <button type="button" role="menuitem" className="menu-item" onClick={() => exportImage('jpeg')}>
               <FileImage size={16} /> JPG image <small>page {currentPage}</small>
             </button>
+            {redactionCount ? (
+              <p className="menu-note">{redactionCount} {redactionCount === 1 ? 'area is' : 'areas are'} permanently redacted in every download.</p>
+            ) : null}
           </Menu>
 
           <Menu
@@ -1128,7 +1712,10 @@ export default function ForgeEditor({
             )}
           >
             <button type="button" role="menuitem" className="menu-item" onClick={saveDraftNow}>
-              <Save size={16} /> Save now
+              <Save size={16} /> Save now <small>⌘S</small>
+            </button>
+            <button type="button" role="menuitem" className="menu-item" onClick={() => setShortcutsOpen(true)}>
+              <Keyboard size={16} /> Keyboard shortcuts <small>?</small>
             </button>
             <div className="menu-sep" />
             <button type="button" role="menuitem" className="menu-item" onClick={clearPage} disabled={!pageElements.length}>
@@ -1149,6 +1736,19 @@ export default function ForgeEditor({
         </div>
       </header>
 
+      <Toolstrip
+        tool={tool}
+        onTool={setTool}
+        onImage={() => imageInputRef.current?.click()}
+        onSignature={openSignature}
+        styles={toolStyles}
+        onStyle={(key, updates) => setToolStyles((prev) => ({ ...prev, [key]: { ...prev[key], ...updates } }))}
+        busy={busy}
+        history={historyFlags}
+        onUndo={undo}
+        onRedo={redo}
+      />
+
       <Document
         file={pdfFile}
         className="editor-body"
@@ -1166,14 +1766,17 @@ export default function ForgeEditor({
       >
         <div className={`drawer-backdrop ${leftOpen || rightOpen ? 'is-open' : ''}`} onClick={() => { setLeftOpen(false); setRightOpen(false); }} />
 
-        <aside className={`editor-rail ${leftOpen ? 'is-open' : ''}`} aria-label="Pages and signatures">
+        <aside className={`editor-rail ${leftOpen ? 'is-open' : ''}`} aria-label="Pages, signatures and redaction">
           <div className="panel-tabs" role="tablist">
-            <button type="button" role="tab" className="panel-tab" aria-selected={leftTab === 'pages'} onClick={() => setLeftTab('pages')}>
-              Pages
-            </button>
-            <button type="button" role="tab" className="panel-tab" aria-selected={leftTab === 'signatures'} onClick={() => setLeftTab('signatures')}>
-              Signatures
-            </button>
+            {[
+              ['pages', 'Pages'],
+              ['signatures', 'Signatures'],
+              ['redact', 'Redact'],
+            ].map(([id, label]) => (
+              <button key={id} type="button" role="tab" className="panel-tab" aria-selected={leftTab === id} onClick={() => setLeftTab(id)}>
+                {label}
+              </button>
+            ))}
           </div>
 
           <div className="panel-scroll">
@@ -1189,36 +1792,23 @@ export default function ForgeEditor({
                   </button>
                 ))}
               </div>
-            ) : (
+            ) : leftTab === 'signatures' ? (
               <div className="panel-section panel-stack">
-                <div className="field">
-                  <label className="field-label" htmlFor="signature-name">New signature</label>
-                  <input
-                    id="signature-name"
-                    className="input"
-                    value={signatureName}
-                    onChange={(event) => setSignatureName(event.target.value)}
-                    placeholder="Name (optional)"
-                  />
-                  <span className="field-hint">Upload a photo or scan; white backgrounds are removed automatically.</span>
+                <div className="panel-row">
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => openSignature('signature')} disabled={busy}>
+                    <Plus size={15} /> Signature
+                  </button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => openSignature('initials')} disabled={busy}>
+                    <Plus size={15} /> Initials
+                  </button>
                 </div>
-                <button type="button" className="btn btn-secondary btn-block" onClick={() => signatureInputRef.current?.click()} disabled={busy}>
-                  <Upload size={16} /> Upload signature
-                </button>
+                <span className="field-hint">Draw, type or upload. Saved signatures can be reused on any document.</span>
                 <div className="divider" />
                 {signatures.length ? (
                   <div className="sig-grid">
                     {signatures.map((signature) => (
                       <div key={signature.id} className="sig-item">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            addSavedSignature(signature);
-                            setLeftOpen(false);
-                          }}
-                          style={{ display: 'grid', gap: 4, padding: 0, border: 0, background: 'none', textAlign: 'left' }}
-                          title="Place on current page"
-                        >
+                        <button type="button" className="sig-use" onClick={() => placeSavedSignature(signature)} title="Place on the page">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img src={signature.url} alt={signature.name || 'Signature'} />
                           <span>{signature.name || 'Saved signature'}</span>
@@ -1245,11 +1835,31 @@ export default function ForgeEditor({
                   <p className="small muted">Saved signatures appear here so you can reuse them on any document.</p>
                 )}
               </div>
+            ) : (
+              <FindRedactPanel pdfFile={pdfFile} numPages={numPages} onMark={markRedactions} onGoToPage={goToPage} />
             )}
           </div>
         </aside>
 
-        <div className="editor-canvas" ref={shellRef} onPointerDown={() => setSelectedId(null)}>
+        <div
+          className="editor-canvas"
+          ref={shellRef}
+          onPointerDown={() => {
+            if (tool === 'select' || tool === 'edit-text') {
+              setSelectedId(null);
+              setEditingId(null);
+            }
+          }}
+          onDragOver={(event) => {
+            if (Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault();
+          }}
+          onDrop={(event) => {
+            const file = Array.from(event.dataTransfer?.files || []).find((f) => f.type.startsWith('image/'));
+            if (!file) return;
+            event.preventDefault();
+            insertImageFile(file, canvasRef.current?.contains(event.target) ? pointFromEvent(event) : null);
+          }}
+        >
           <div className="editor-canvas-inner">
             <div className="pdf-stage" ref={canvasRef} style={{ width: renderSize.width, height: renderSize.height }}>
               <Page
@@ -1285,183 +1895,139 @@ export default function ForgeEditor({
                     ))
                   : null}
 
-                {pageElements.map((item) => {
-                  const isSelected = selectedId === item.id;
-                  if (item.type === 'textEdit') {
-                    const isEditing = editingId === item.id;
-                    const changed = isChangedTextEdit(item);
-                    const fontPx = (item.size / item.pageWidth) * renderSize.width;
-                    const textStyle = {
-                      left: (item.original.originX - item.x) * renderSize.width,
-                      // line-height 1 puts the baseline about 0.78em below the top for most fonts.
-                      top: (item.original.baseline - item.y) * renderSize.height - fontPx * 0.78,
-                      color: item.color,
-                      fontSize: `${fontPx}px`,
-                      fontWeight: item.bold ? 700 : 400,
-                      fontStyle: item.italic ? 'italic' : 'normal',
-                      fontFamily: previewFontFamily(item),
-                    };
-                    return (
+                {pageElements.map(renderItem)}
+
+                {CREATE_TOOLS.has(tool) ? (
+                  <div
+                    className="draw-layer"
+                    style={{ cursor: drawCursor }}
+                    onPointerDown={onDrawStart}
+                    onPointerMove={onDrawMove}
+                    onPointerUp={onDrawEnd}
+                    onPointerCancel={cancelDrawing}
+                    onPointerLeave={() => setHoverPoint(null)}
+                  >
+                    {draftPreview?.kind === 'pen' ? (
+                      <svg className="draft-ink" width="100%" height="100%" aria-hidden="true">
+                        <polyline
+                          points={draftPreview.points.map((p) => `${p.x * renderSize.width},${p.y * renderSize.height}`).join(' ')}
+                          fill="none"
+                          stroke={toolStyles.pen.color}
+                          strokeWidth={Math.max(0.5, toolStyles.pen.strokeWidth * renderSize.width)}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    ) : null}
+                    {draftPreview?.kind === 'shape' ? (
                       <div
-                        key={item.id}
-                        className={`item text-edit ${isSelected ? 'selected' : ''}`}
+                        className={`draft-shape ${draftPreview.item.type === 'redact' ? 'redact-item' : ''}`}
                         style={{
-                          left: `${item.x * 100}%`,
-                          top: `${item.y * 100}%`,
-                          width: `${item.width * 100}%`,
-                          height: `${item.height * 100}%`,
-                          background: changed || isEditing ? item.original.background : 'transparent',
-                        }}
-                        onPointerDown={(event) => startInteraction(event, item.id, 'drag')}
-                        onDoubleClick={() => {
-                          setSelectedId(item.id);
-                          setEditingId(item.id);
+                          left: `${draftPreview.item.x * 100}%`,
+                          top: `${draftPreview.item.y * 100}%`,
+                          width: `${draftPreview.item.width * 100}%`,
+                          height: `${draftPreview.item.height * 100}%`,
                         }}
                       >
-                        {isEditing ? (
-                          <input
-                            autoFocus
-                            value={item.text}
-                            onChange={(event) => updateSelected({ text: event.target.value })}
-                            onBlur={() => setEditingId(null)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
-                            }}
-                            className="text-edit-input"
-                            style={textStyle}
-                            aria-label="Edit text"
-                          />
-                        ) : changed ? (
-                          <span className="text-edit-text" style={textStyle}>{item.text}</span>
-                        ) : null}
-
-                        {isSelected && !isEditing ? (
-                          <div className="item-toolbar" onPointerDown={(event) => event.stopPropagation()}>
-                            <button type="button" onClick={() => setEditingId(item.id)} aria-label="Edit text" title="Edit text">
-                              <Type size={14} />
-                            </button>
-                            <button type="button" onClick={removeSelected} aria-label="Revert to original" title="Revert to original">
-                              <RotateCcw size={14} />
-                            </button>
-                          </div>
-                        ) : null}
+                        <ElementGraphic
+                          item={draftPreview.item}
+                          width={draftPreview.item.width * renderSize.width}
+                          height={draftPreview.item.height * renderSize.height}
+                          pageWidth={renderSize.width}
+                        />
                       </div>
-                    );
-                  }
-                  return (
-                    <div
-                      key={item.id}
-                      className={`item ${isSelected ? 'selected' : ''} ${item.type === 'text' ? 'text-item' : 'image-item'}`}
-                      style={{
-                        left: `${item.x * 100}%`,
-                        top: `${item.y * 100}%`,
-                        width: `${item.width * 100}%`,
-                        height: `${item.height * 100}%`,
-                      }}
-                      onMouseEnter={() => setHoverId(item.id)}
-                      onMouseLeave={() => setHoverId((prev) => (prev === item.id ? null : prev))}
-                      onPointerDown={(event) => startInteraction(event, item.id, 'drag')}
-                      onDoubleClick={() => {
-                        if (item.type === 'text') {
-                          setSelectedId(item.id);
-                          setEditingId(item.id);
-                        }
-                      }}
-                    >
-                      {item.type === 'text' ? (
-                        editingId === item.id ? (
-                          <textarea
-                            autoFocus
-                            value={item.text}
-                            onChange={(event) => updateSelected({ text: event.target.value })}
-                            onBlur={() => setEditingId(null)}
-                            className="inline-editor"
-                            style={{
-                              color: item.color,
-                              fontWeight: item.bold ? 700 : 400,
-                              fontSize: `${Math.max(item.fontSize * renderSize.width, 8)}px`,
-                            }}
-                          />
-                        ) : (
-                          <div
-                            className="text-content"
-                            style={{
-                              color: item.color,
-                              fontWeight: item.bold ? 700 : 400,
-                              fontSize: `${Math.max(item.fontSize * renderSize.width, 8)}px`,
-                            }}
-                          >
-                            {item.text}
-                          </div>
-                        )
-                      ) : (
+                    ) : null}
+                    {draftPreview?.kind === 'box' ? (
+                      <div
+                        className="draft-box"
+                        style={{
+                          left: `${draftPreview.box.x * 100}%`,
+                          top: `${draftPreview.box.y * 100}%`,
+                          width: `${draftPreview.box.width * 100}%`,
+                          height: `${draftPreview.box.height * 100}%`,
+                        }}
+                      />
+                    ) : null}
+                    {tool === 'place' && placement && hoverPoint ? (() => {
+                      const box = imageBox(placement.ratio, placement.isSignature ? 0.24 : 0.34, hoverPoint);
+                      return (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={item.url} alt={item.isSignature ? 'Signature' : 'Overlay'} draggable={false} />
-                      )}
-
-                      {isSelected && editingId !== item.id ? (
-                        <div className="item-toolbar" onPointerDown={(event) => event.stopPropagation()}>
-                          {item.type === 'text' ? (
-                            <button type="button" onClick={() => setEditingId(item.id)} aria-label="Edit text" title="Edit text">
-                              <Type size={14} />
-                            </button>
-                          ) : null}
-                          <button type="button" onClick={duplicateSelected} aria-label="Duplicate" title="Duplicate">
-                            <Copy size={14} />
-                          </button>
-                          <button type="button" onClick={removeSelected} aria-label="Delete" title="Delete">
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      ) : null}
-
-                      {isSelected || (item.type === 'image' && hoverId === item.id) ? (
-                        <>
-                          <button type="button" className="resize-handle nw" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'nw')} aria-label="Resize" />
-                          <button type="button" className="resize-handle ne" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'ne')} aria-label="Resize" />
-                          <button type="button" className="resize-handle sw" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'sw')} aria-label="Resize" />
-                          <button type="button" className="resize-handle se" onPointerDown={(event) => startInteraction(event, item.id, 'resize', 'se')} aria-label="Resize" />
-                        </>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                        <img
+                          className="place-ghost"
+                          src={placement.url}
+                          alt=""
+                          style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` }}
+                        />
+                      );
+                    })() : null}
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
 
-          {exportNotice || textMode ? (
+          {showCanvasStatus ? (
             <div className="text-mode-status" role="status" onPointerDown={(event) => event.stopPropagation()}>
               {exportNotice ? (
                 <>
                   <Loader2 size={14} className="spin" /> {exportNotice}
                 </>
-              ) : !pageLayout || pageLayout.status === 'loading' ? (
-                <>
-                  <Loader2 size={14} className="spin" />
-                  {pageLayout?.waking
-                    ? `Starting the text engine… ${pageLayout.waking}s`
-                    : 'Finding text… scanned pages take a few seconds longer'}
-                </>
-              ) : pageLayout.status === 'error' ? (
-                <>
-                  <span>{pageLayout.error}</span>
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadLayout(currentPage - 1)}>
-                    Retry
-                  </button>
-                </>
-              ) : pageLayout.ocrUnavailable ? (
-                <span>This page is a scan and text recognition isn&apos;t available right now.</span>
-              ) : !pageLayout.lines.length ? (
-                <span>No editable text found on this page.</span>
+              ) : textMode ? (
+                !pageLayout || pageLayout.status === 'loading' ? (
+                  <>
+                    <Loader2 size={14} className="spin" />
+                    {pageLayout?.waking
+                      ? `Starting the text engine… ${pageLayout.waking}s`
+                      : 'Finding text… scanned pages take a few seconds longer'}
+                  </>
+                ) : pageLayout.status === 'error' ? (
+                  <>
+                    <span>{pageLayout.error}</span>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadLayout(currentPage - 1)}>
+                      Retry
+                    </button>
+                  </>
+                ) : pageLayout.ocrUnavailable ? (
+                  <span>This page is a scan and text recognition isn&apos;t available right now.</span>
+                ) : !pageLayout.lines.length ? (
+                  <span>No editable text found on this page.</span>
+                ) : (
+                  <span>
+                    {pageLayout.source === 'ocr' ? 'Scanned page: text recognised with OCR. ' : ''}
+                    Click any line to edit it.
+                  </span>
+                )
               ) : (
-                <span>
-                  {pageLayout.source === 'ocr' ? 'Scanned page: text recognised with OCR. ' : ''}
-                  Click any line to edit it.
-                </span>
+                <>
+                  <span>{toolHint}</span>
+                  {tool === 'place' && placement ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => {
+                        setTool('select');
+                        placeImage(placement, null);
+                      }}
+                    >
+                      Place in center
+                    </button>
+                  ) : null}
+                  {tool === 'redact' ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => {
+                        setLeftTab('redact');
+                        setLeftOpen(true);
+                      }}
+                    >
+                      Find text
+                    </button>
+                  ) : null}
+                </>
               )}
-              {textMode && !exportNotice ? (
-                <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => setTextMode(false)} aria-label="Close edit text mode">
+              {!exportNotice ? (
+                <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => setTool('select')} aria-label="Done, back to Select">
                   <X size={14} />
                 </button>
               ) : null}
@@ -1490,31 +2056,33 @@ export default function ForgeEditor({
             ) : null}
 
             <section className="panel-section">
-              <h3>
-                {selectedElement
-                  ? selectedElement.type === 'textEdit'
-                    ? 'Edited text'
-                    : selectedElement.type === 'text'
-                      ? 'Text'
-                      : selectedElement.isSignature
-                        ? 'Signature'
-                        : 'Image'
-                  : 'Properties'}
-              </h3>
-              {!selectedElement ? (
+              <h3>{selectedElement ? (selectedElement.type === 'textEdit' ? 'Edited text' : describeElement(selectedElement).replace(/^Empty text$/, 'Text')) : 'Properties'}</h3>
+              {selectedElement ? (
+                <Inspector
+                  element={selectedElement}
+                  fontGroups={fontGroups}
+                  numPages={numPages}
+                  onChange={updateSelected}
+                  onDuplicate={duplicateSelected}
+                  onDelete={removeSelected}
+                  onCopyToAllPages={copyToAllPages}
+                  onLayer={reorderSelected}
+                />
+              ) : (
                 <div className="panel-stack">
-                  <p className="small muted">Select an item on the page to edit it, or add something new. Use Edit text to change words already in the PDF.</p>
+                  <p className="small muted">
+                    {toolHint || 'Select an item on the page to change it, or pick a tool above. Edit text changes words already in the PDF.'}
+                  </p>
                   <div className="panel-row">
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={addText}><Plus size={14} /> Text</button>
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => imageInputRef.current?.click()} disabled={busy}><Plus size={14} /> Image</button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setTool('text'); setRightOpen(false); }}><Plus size={14} /> Text</button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => openSignature('signature')} disabled={busy}><Plus size={14} /> Signature</button>
                   </div>
-                  {/* The toolbar is hidden on phones, so this is how small screens reach Edit text. */}
                   <div className="panel-row">
                     <button
                       type="button"
                       className={`btn btn-secondary btn-sm ${textMode ? 'is-active' : ''}`}
                       onClick={() => {
-                        setTextMode((value) => !value);
+                        setTool(textMode ? 'select' : 'edit-text');
                         setRightOpen(false);
                       }}
                       aria-pressed={textMode}
@@ -1523,218 +2091,8 @@ export default function ForgeEditor({
                     </button>
                   </div>
                   <p className="small muted">
-                    Tip: <span className="kbd">⌘Z</span> undo · <span className="kbd">Del</span> remove · arrows nudge
+                    Tip: press <span className="kbd">?</span> for keyboard shortcuts. Paste or drop images straight onto the page.
                   </p>
-                </div>
-              ) : (
-                <div className="panel-stack">
-                  {selectedElement.type === 'textEdit' ? (
-                    <>
-                      <div className="field">
-                        <label className="field-label" htmlFor="text-edit-field">Content</label>
-                        <input
-                          id="text-edit-field"
-                          className="input"
-                          value={selectedElement.text}
-                          onChange={(event) => updateSelected({ text: event.target.value })}
-                        />
-                        <span className="field-hint">Was: {selectedElement.original.text}</span>
-                      </div>
-                      <div className="field">
-                        <label className="field-label" htmlFor="text-edit-size">Size · {selectedElement.size.toFixed(1)} pt</label>
-                        <input
-                          id="text-edit-size"
-                          type="range"
-                          min={Math.max(4, Math.round(selectedElement.original.size * 0.5))}
-                          max={Math.round(selectedElement.original.size * 2)}
-                          step={0.5}
-                          value={selectedElement.size}
-                          onChange={(event) => updateSelected({ size: Number(event.target.value) })}
-                        />
-                      </div>
-                      <div className="field">
-                        <span className="field-label">Font</span>
-                        <div className="panel-row">
-                          <select
-                            className="select"
-                            value={selectedElement.fontFamily || ''}
-                            onChange={(event) => {
-                              const name = event.target.value;
-                              const category = fontGroups.flatMap((group) => group.fonts).find((font) => font.name === name)?.category;
-                              updateSelected({
-                                fontFamily: name,
-                                // Picking "Original" restores its kind; a library font sets its own.
-                                family: !name
-                                  ? selectedElement.original.family
-                                  : ['sans', 'serif', 'mono'].includes(category)
-                                    ? category
-                                    : selectedElement.family,
-                              });
-                            }}
-                            aria-label="Font"
-                          >
-                            <option value="">
-                              {selectedElement.original.font
-                                ? `Original (${fontDisplayName(selectedElement.original.font)})`
-                                : `Automatic${selectedElement.original.match ? ` (${selectedElement.original.match})` : ''}`}
-                            </option>
-                            {fontGroups.map((group) => (
-                              <optgroup key={group.label} label={group.label}>
-                                {group.fonts.map((font) => (
-                                  <option key={font.name} value={font.name}>{font.name}</option>
-                                ))}
-                              </optgroup>
-                            ))}
-                            {selectedElement.fontFamily && !fontGroups.some((group) => group.fonts.some((font) => font.name === selectedElement.fontFamily)) ? (
-                              <option value={selectedElement.fontFamily}>{selectedElement.fontFamily}</option>
-                            ) : null}
-                          </select>
-                          <button
-                            type="button"
-                            className={`btn btn-secondary btn-icon btn-sm ${selectedElement.bold ? 'is-active' : ''}`}
-                            onClick={() => updateSelected({ bold: !selectedElement.bold })}
-                            aria-pressed={selectedElement.bold}
-                            aria-label="Bold"
-                            style={{ flex: '0 0 auto' }}
-                          >
-                            <Bold size={15} />
-                          </button>
-                          <button
-                            type="button"
-                            className={`btn btn-secondary btn-icon btn-sm ${selectedElement.italic ? 'is-active' : ''}`}
-                            onClick={() => updateSelected({ italic: !selectedElement.italic })}
-                            aria-pressed={selectedElement.italic}
-                            aria-label="Italic"
-                            style={{ flex: '0 0 auto' }}
-                          >
-                            <Italic size={15} />
-                          </button>
-                        </div>
-                        <span className="field-hint">
-                          {(() => {
-                            const { original } = selectedElement;
-                            const name = fontDisplayName(original.font);
-                            const fallback = original.match
-                              ? original.matchExact
-                                ? `another copy of ${original.match}`
-                                : `${original.match}, a close match`
-                              : 'a similar font';
-                            if (selectedElement.fontFamily) return `Drawn in ${selectedElement.fontFamily}.`;
-                            if (original.source === 'ocr') {
-                              const style = [original.bold && 'bold', original.italic && 'italic'].filter(Boolean).join(' ');
-                              return original.detected
-                                ? `Looks like ${original.match}${style ? ` ${style}` : ''}, detected from the scan. Pick another font if it looks different.`
-                                : `Recognised from a scan, so ${original.match || 'a similar font'} is used. Pick another font if it looks different.`;
-                            }
-                            if (!keepsOriginalStyle(selectedElement)) {
-                              return `Style changed, so ${original.match && !original.matchExact ? `${original.match} (like ${name})` : name || 'a similar font'} will be used in that style.`;
-                            }
-                            return name
-                              ? `Keeps ${name} when it has every character you type; otherwise ${fallback}.`
-                              : `${original.match || 'A similar font'} will be used.`;
-                          })()}
-                        </span>
-                      </div>
-                      <div className="field">
-                        <span className="field-label">Color</span>
-                        <div className="color-swatches">
-                          {[selectedElement.original.color, ...TEXT_COLORS.filter((hex) => hex !== selectedElement.original.color)].map((hex) => (
-                            <button
-                              key={hex}
-                              type="button"
-                              className="swatch"
-                              style={{ background: hex }}
-                              aria-label={hex === selectedElement.original.color ? 'Original color' : `Color ${hex}`}
-                              aria-pressed={selectedElement.color === hex}
-                              onClick={() => updateSelected({ color: hex })}
-                            />
-                          ))}
-                          <input
-                            type="color"
-                            value={selectedElement.color}
-                            onChange={(event) => updateSelected({ color: event.target.value })}
-                            className="color-input"
-                            aria-label="Custom color"
-                          />
-                        </div>
-                      </div>
-                      <div className="panel-row">
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={removeSelected}>
-                          <RotateCcw size={14} /> Revert to original
-                        </button>
-                      </div>
-                    </>
-                  ) : selectedElement.type === 'text' ? (
-                    <>
-                      <div className="field">
-                        <label className="field-label" htmlFor="text-content-field">Content</label>
-                        <textarea
-                          id="text-content-field"
-                          value={selectedElement.text}
-                          onChange={(event) => updateSelected({ text: event.target.value })}
-                          rows={3}
-                          className="textarea"
-                        />
-                      </div>
-                      <div className="field">
-                        <label className="field-label" htmlFor="font-size-field">
-                          Size · {Math.round(selectedElement.fontSize * 612)} pt
-                        </label>
-                        <input
-                          id="font-size-field"
-                          type="range"
-                          min={0.012}
-                          max={0.09}
-                          step={0.002}
-                          value={selectedElement.fontSize}
-                          onChange={(event) => updateSelected({ fontSize: Number(event.target.value) })}
-                        />
-                      </div>
-                      <div className="field">
-                        <span className="field-label">Style</span>
-                        <div className="panel-row" style={{ justifyContent: 'space-between' }}>
-                          <div className="color-swatches">
-                            {TEXT_COLORS.map((hex) => (
-                              <button
-                                key={hex}
-                                type="button"
-                                className="swatch"
-                                style={{ background: hex }}
-                                aria-label={`Color ${hex}`}
-                                aria-pressed={selectedElement.color === hex}
-                                onClick={() => updateSelected({ color: hex })}
-                              />
-                            ))}
-                            <input
-                              type="color"
-                              value={selectedElement.color}
-                              onChange={(event) => updateSelected({ color: event.target.value })}
-                              className="color-input"
-                              aria-label="Custom color"
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            className={`btn btn-secondary btn-icon btn-sm ${selectedElement.bold ? 'is-active' : ''}`}
-                            onClick={() => updateSelected({ bold: !selectedElement.bold })}
-                            aria-pressed={selectedElement.bold}
-                            aria-label="Bold"
-                            style={{ flex: '0 0 auto' }}
-                          >
-                            <Bold size={15} />
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <p className="small muted">Drag to move. Use the corner handles to resize.</p>
-                  )}
-                  {selectedElement.type !== 'textEdit' ? (
-                    <div className="panel-row">
-                      <button type="button" className="btn btn-secondary btn-sm" onClick={duplicateSelected}><Copy size={14} /> Duplicate</button>
-                      <button type="button" className="btn btn-danger-ghost btn-sm" onClick={removeSelected}><Trash2 size={14} /> Delete</button>
-                    </div>
-                  ) : null}
                 </div>
               )}
             </section>
@@ -1865,18 +2223,13 @@ export default function ForgeEditor({
                       key={item.id}
                       type="button"
                       className={`layer-row ${item.id === selectedId ? 'active' : ''}`}
-                      onClick={() => setSelectedId(item.id)}
+                      onClick={() => {
+                        setTool('select');
+                        setSelectedId(item.id);
+                      }}
                     >
-                      {item.type === 'textEdit' ? <ScanText size={14} /> : item.type === 'text' ? <Type size={14} /> : item.isSignature ? <Signature size={14} /> : <ImagePlus size={14} />}
-                      <span>
-                        {item.type === 'textEdit'
-                          ? item.text || 'Removed text'
-                          : item.type === 'text'
-                            ? item.text || 'Empty text'
-                            : item.isSignature
-                              ? 'Signature'
-                              : 'Image'}
-                      </span>
+                      <i className={`layer-dot type-${item.type}`} aria-hidden="true" />
+                      <span>{describeElement(item)}</span>
                     </button>
                   ))}
                 </div>
@@ -1887,6 +2240,16 @@ export default function ForgeEditor({
           </div>
         </aside>
       </Document>
+
+      {signatureDialog ? (
+        <SignatureDialog
+          mode={signatureDialog}
+          defaultText={signatureDialog === 'initials' ? initialsValue : userName || ''}
+          onClose={() => setSignatureDialog(null)}
+          onCreate={createSignature}
+        />
+      ) : null}
+      {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
     </div>
   );
 }

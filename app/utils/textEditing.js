@@ -169,14 +169,25 @@ function toBackendEdit(edit) {
   };
 }
 
-/** Returns the PDF bytes with the text edits applied, reporting font fallbacks via onWarning. */
-export async function applyTextEdits({ pdfFile, edits, onWarning }) {
+/**
+ * Returns the PDF bytes with text edits and redactions applied on the server, reporting font
+ * fallbacks via onWarning. Redaction permanently removes whatever lies under each box (and
+ * the document's metadata), so it never relies on a black rectangle drawn on top.
+ */
+export async function applyServerEdits({ pdfFile, edits = [], redactions = [], onWarning }) {
   await ensureBackend();
   const form = new FormData();
   form.append('file', pdfFile, pdfFile.name || 'document.pdf');
   form.append('edits', JSON.stringify(edits.map(toBackendEdit)));
+  if (redactions.length) {
+    form.append(
+      'redactions',
+      JSON.stringify(redactions.map((item) => ({ page: item.pageIndex, x: item.x, y: item.y, width: item.width, height: item.height }))),
+    );
+    form.append('scrub_metadata', 'true');
+  }
   const res = await submitToolRequest('edit-text', form);
-  if (!res.ok) throw await toolError(res, 'Could not apply the text edits.');
+  if (!res.ok) throw await toolError(res, redactions.length ? 'Could not apply the redactions.' : 'Could not apply the text edits.');
 
   try {
     JSON.parse(res.headers.get('x-forge-warnings') || '[]').forEach((message) => onWarning?.(message));
@@ -184,4 +195,24 @@ export async function applyTextEdits({ pdfFile, edits, onWarning }) {
     // Warnings are informational only.
   }
   return new Uint8Array(await res.arrayBuffer());
+}
+
+export const applyTextEdits = applyServerEdits;
+
+/**
+ * Finds text to redact: literal terms and/or patterns (email, phone, card, ssn, iban, url,
+ * date). Returns { matches: [{ page, kind, text, x, y, width, height }], scannedPages }.
+ */
+export async function findText({ pdfFile, query, patterns = [], matchCase = false, wholeWord = false, searchScans = true, onWaking }) {
+  await ensureBackend(onWaking);
+  const form = new FormData();
+  form.append('file', pdfFile, pdfFile.name || 'document.pdf');
+  form.append('query', query || '');
+  form.append('patterns', patterns.join(','));
+  form.append('match_case', String(matchCase));
+  form.append('whole_word', String(wholeWord));
+  form.append('search_scans', String(searchScans));
+  const res = await submitToolRequest('find-text', form);
+  if (!res.ok) throw await toolError(res, 'Could not search this PDF.');
+  return res.json();
 }

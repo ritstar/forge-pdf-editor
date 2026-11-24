@@ -42,7 +42,7 @@ function EditorSplash({ children }) {
   );
 }
 
-export default function EditorClientPage({ documentId }) {
+export default function EditorClientPage({ documentId, initialTool = null }) {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
@@ -197,7 +197,7 @@ export default function EditorClientPage({ documentId }) {
   );
 
   const handleCreateSignature = useCallback(
-    async (file, label) => {
+    async (file, label, kind = 'signature') => {
       if (!user) throw new Error('No active user');
 
       const isPng = file.type === 'image/png';
@@ -208,7 +208,8 @@ export default function EditorClientPage({ documentId }) {
       const now = new Date().toISOString();
       const record = {
         user_id: user.uid,
-        name: label || `Signature ${new Date().toLocaleDateString()}`,
+        name: label || `${kind === 'initials' ? 'Initials' : 'Signature'} ${new Date().toLocaleDateString()}`,
+        kind: kind === 'initials' ? 'initials' : 'signature',
         image_path: blob.url,
         mime_type: file.type || 'image/png',
         is_default: false,
@@ -269,6 +270,7 @@ export default function EditorClientPage({ documentId }) {
       documentTitle={documentRow.title}
       initialPdfFile={initialPdfFile}
       initialDraft={initialDraft}
+      initialTool={initialTool}
       signatures={signatures}
       onSaveDraft={handleSaveDraft}
       onUploadOverlay={handleUploadOverlay}

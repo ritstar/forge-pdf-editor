@@ -29,18 +29,31 @@ function charSet(font) {
   return new Set(font.getCharacterSet());
 }
 
+const STANDARD = {
+  sans: [StandardFonts.Helvetica, StandardFonts.HelveticaBold, StandardFonts.HelveticaOblique, StandardFonts.HelveticaBoldOblique],
+  serif: [StandardFonts.TimesRoman, StandardFonts.TimesRomanBold, StandardFonts.TimesRomanItalic, StandardFonts.TimesRomanBoldItalic],
+  mono: [StandardFonts.Courier, StandardFonts.CourierBold, StandardFonts.CourierOblique, StandardFonts.CourierBoldOblique],
+};
+
+// Slant used when a Unicode font has no italic face (pdf-lib's xSkew, in degrees).
+export const FAUX_ITALIC_DEGREES = 12;
+
 /**
  * Picks fonts for arbitrary text and splits it into runs that each font can draw.
- * Pure WinAnsi text keeps using Helvetica (identical output to before); anything else uses
- * Noto Sans, with Noto Sans Devanagari for Hindi/Marathi/Nepali. Characters no font covers
- * become "?" instead of aborting the export.
+ * Text the standard fonts can encode (WinAnsi) uses Helvetica, Times or Courier in the
+ * requested weight and slant; anything else uses Noto Sans, with Noto Sans Devanagari for
+ * Hindi/Marathi/Nepali (slanted when italic is asked for). Characters no font covers become
+ * "?" instead of aborting the export.
  */
 export async function createFontKit(pdfDoc) {
-  const standard = {
-    regular: await pdfDoc.embedFont(StandardFonts.Helvetica),
-    bold: await pdfDoc.embedFont(StandardFonts.HelveticaBold),
-  };
-  const standardChars = charSet(standard.regular);
+  const standardFonts = new Map();
+  async function standardFont(family, bold, italic) {
+    const name = (STANDARD[family] || STANDARD.sans)[(bold ? 1 : 0) + (italic ? 2 : 0)];
+    if (!standardFonts.has(name)) standardFonts.set(name, pdfDoc.embedFont(name));
+    return standardFonts.get(name);
+  }
+  // Every standard font shares the WinAnsi character set.
+  const standardChars = charSet(await standardFont('sans', false, false));
   const embedded = new Map();
   let fontkitRegistered = false;
 
@@ -61,16 +74,18 @@ export async function createFontKit(pdfDoc) {
   const needsUnicode = (text) => Array.from(String(text)).some((ch) => !WHITESPACE.test(ch) && !standardChars.has(ch.codePointAt(0)));
 
   /** Returns a layout helper for one piece of text (call once per text element). */
-  async function forText(text, { bold = false } = {}) {
+  async function forText(text, { bold = false, italic = false, family = 'sans' } = {}) {
     const weight = bold ? 'bold' : 'regular';
     const source = String(text).replace(/\t/g, '    ');
 
     let candidates;
+    let skew = 0;
     if (!needsUnicode(source)) {
-      candidates = [{ font: standard[weight], chars: standardChars }];
+      candidates = [{ font: await standardFont(family, bold, italic), chars: standardChars }];
     } else {
       candidates = [await embed('sans', weight)];
       if (DEVANAGARI.test(source)) candidates.push(await embed('devanagari', weight));
+      if (italic) skew = FAUX_ITALIC_DEGREES;
     }
     const primary = candidates[0];
 
@@ -97,7 +112,7 @@ export async function createFontKit(pdfDoc) {
 
     const widthOf = (line, size) => runsOf(line).reduce((sum, run) => sum + run.font.widthOfTextAtSize(run.text, size), 0);
 
-    return { text: source, runsOf, widthOf };
+    return { text: source, runsOf, widthOf, skew };
   }
 
   return { forText };
