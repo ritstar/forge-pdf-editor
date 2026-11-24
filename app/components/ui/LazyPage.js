@@ -5,7 +5,9 @@ import { Page } from 'react-pdf';
 
 // Renders a react-pdf <Page> only once it scrolls near the viewport, so documents with
 // hundreds of pages don't rasterize every thumbnail up front.
-export default function LazyPage({ pageNumber, width, rotate, placeholderRatio = 1.294 }) {
+// `pdf` (a loaded pdf.js document) lets a page render outside a <Document>, e.g. when one grid
+// shows pages from several files.
+export default function LazyPage({ pageNumber, width, rotate, pdf, placeholderRatio = 1.294 }) {
   const ref = useRef(null);
   const [visible, setVisible] = useState(false);
 
@@ -34,6 +36,7 @@ export default function LazyPage({ pageNumber, width, rotate, placeholderRatio =
           pageNumber={pageNumber}
           width={width}
           rotate={rotate}
+          {...(pdf ? { pdf } : {})}
           renderTextLayer={false}
           renderAnnotationLayer={false}
           loading={placeholder}

@@ -70,6 +70,8 @@ export default function ToolShell({
           <div className="tool-assurances">
             {processing === 'browser' ? (
               <span><ShieldCheck size={15} /> Processed in your browser — files never leave your device</span>
+            ) : processing === 'workspace' ? (
+              <span><ShieldCheck size={15} /> Saved privately to your workspace, so you can come back to it</span>
             ) : (
               <span><ShieldCheck size={15} /> Encrypted transfer, files deleted right after processing</span>
             )}

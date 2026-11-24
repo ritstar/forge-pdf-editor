@@ -9,10 +9,12 @@ import { auth } from '@/lib/firebase/config';
 import { logToolAction } from '@/lib/history';
 import { downloadBlob, formatFileSize, isPdfFile, stripExtension } from '@/app/utils/files';
 import { renderPdfPageToBlob } from '@/app/utils/pdfToImage';
+import { parseRanges, rangesToIndices } from '@/app/utils/pageRanges';
 
 const QUALITY = {
-    standard: { scale: 1.5, label: 'Standard', detail: '~108 DPI, smaller files' },
-    high: { scale: 2.5, label: 'High', detail: '~180 DPI, sharper text' },
+    standard: { scale: 150 / 72, label: 'Screen', detail: '150 DPI, small files' },
+    high: { scale: 220 / 72, label: 'High', detail: '220 DPI, sharp text' },
+    print: { scale: 300 / 72, label: 'Print', detail: '300 DPI, for printing' },
 };
 
 export default function PdfToJpgClient() {
@@ -20,6 +22,8 @@ export default function PdfToJpgClient() {
     const [images, setImages] = useState([]);
     const [quality, setQuality] = useState('high');
     const [format, setFormat] = useState('jpeg');
+    const [pagesText, setPagesText] = useState('');
+    const [pageCount, setPageCount] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
     const [progress, setProgress] = useState('');
     const [error, setError] = useState('');
@@ -42,7 +46,16 @@ export default function PdfToJpgClient() {
         }
         setFile(selectedFile);
         replaceImages([]);
+        setPageCount(0);
+        // Page count for validating the page selection; rendering happens on Convert.
+        selectedFile.arrayBuffer()
+            .then((data) => pdfjs.getDocument({ data }).promise)
+            .then((pdf) => { setPageCount(pdf.numPages); pdf.destroy(); })
+            .catch(() => setPageCount(0));
     };
+
+    const selection = pageCount ? parseRanges(pagesText, pageCount) : { ranges: [], error: '' };
+    const pageNumbers = [...new Set(rangesToIndices(selection.ranges))].map((i) => i + 1);
 
     const extension = format === 'jpeg' ? 'jpg' : 'png';
 
@@ -56,12 +69,12 @@ export default function PdfToJpgClient() {
             replaceImages([]);
 
             pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
-            const totalPages = pdf.numPages;
             const baseName = stripExtension(file.name);
             const rendered = [];
+            const wanted = pageNumbers.length ? pageNumbers : Array.from({ length: pdf.numPages }, (_, i) => i + 1);
 
-            for (let i = 1; i <= totalPages; i++) {
-                setProgress(`Rendering page ${i} of ${totalPages}…`);
+            for (const [n, i] of wanted.entries()) {
+                setProgress(`Rendering page ${n + 1} of ${wanted.length}…`);
                 const blob = await renderPdfPageToBlob(pdf, i, { scale: QUALITY[quality].scale, format, quality: 0.9 });
                 rendered.push({ id: i, blob, url: URL.createObjectURL(blob), name: `${baseName}_page_${i}.${extension}` });
             }
@@ -132,6 +145,11 @@ export default function PdfToJpgClient() {
                             </div>
                         </div>
                         <div className="field">
+                            <label className="field-label" htmlFor="jpg-pages">Pages</label>
+                            <input id="jpg-pages" className="input" value={pagesText} onChange={(e) => { setPagesText(e.target.value); replaceImages([]); }} placeholder={pageCount ? `All ${pageCount} — or e.g. 1-3, 7` : 'All pages'} aria-invalid={Boolean(selection.error)} />
+                            {selection.error ? <span className="error-text">{selection.error}</span> : null}
+                        </div>
+                        <div className="field">
                             <span className="field-label">Quality</span>
                             <div className="option-list" role="group" aria-label="Quality">
                                 {Object.entries(QUALITY).map(([key, q]) => (
@@ -147,7 +165,7 @@ export default function PdfToJpgClient() {
                 ),
                 action: done
                     ? { label: images.length === 1 ? 'Download image' : 'Download all (ZIP)', icon: Download, busyLabel: progress || 'Working…', onClick: downloadAll, busy: isProcessing }
-                    : { label: `Convert to ${format === 'jpeg' ? 'JPG' : 'PNG'}`, icon: ImageIcon, busyLabel: progress || 'Converting…', onClick: convert, busy: isProcessing },
+                    : { label: `Convert to ${format === 'jpeg' ? 'JPG' : 'PNG'}`, icon: ImageIcon, busyLabel: progress || 'Converting…', onClick: convert, busy: isProcessing, disabled: Boolean(selection.error) },
             }}
         >
             {done ? (

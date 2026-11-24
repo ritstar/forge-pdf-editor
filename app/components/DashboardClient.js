@@ -11,15 +11,14 @@ import {
   limit,
   getDoc,
   getDocs,
-  addDoc,
   deleteDoc,
   doc,
 } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase/config';
 import AppHeader, { AppFooter } from './AppHeader';
 import DashboardView from './DashboardView';
-import { sanitizeName } from '@/lib/sanitize';
-import { deleteBlobs, uploadToBlob } from '@/lib/blobClient';
+import { deleteBlobs } from '@/lib/blobClient';
+import { createWorkspaceDocument } from '@/lib/documents';
 import { isPdfFile } from '@/app/utils/files';
 import { warmBackend } from '@/app/utils/useBackendStatus';
 
@@ -91,24 +90,11 @@ export default function DashboardClient() {
     setError('');
 
     try {
-      const cleanName = sanitizeName(file.name.replace(/\.pdf$/i, '')) + '.pdf';
-      const blobPath = `documents/${user.uid}/${crypto.randomUUID()}-${cleanName}`;
-      const blob = await uploadToBlob(blobPath, file, 'application/pdf');
-
-      const docRef = await addDoc(collection(db, 'documents'), {
-        user_id: user.uid,
-        title: file.name,
-        file_path: blob.url,
-        file_size: file.size,
-        mime_type: 'application/pdf',
-        status: 'draft',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
+      const id = await createWorkspaceDocument(user, file);
 
       // Clear state before routing
       setUploading(false);
-      router.push(`/editor/${docRef.id}`);
+      router.push(`/editor/${id}`);
     } catch (err) {
       console.error('Upload Error:', err);
       setUploading(false);

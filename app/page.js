@@ -63,19 +63,19 @@ const FEATURES = [
     icon: PenLine,
     color: 'var(--cat-edit)',
     title: 'Edit and sign in minutes',
-    body: 'Change the words already in a PDF, even on scans, in a matching font. Place text, images and saved signatures, fill in forms, and pick up where you left off with autosaved drafts.',
+    body: 'Change the words already in a PDF, even on scans, in a matching font. Draw, highlight and annotate, sign by drawing or typing, fill in forms, and pick up where you left off with autosaved drafts.',
   },
   {
     icon: CloudOff,
     color: 'var(--success)',
     title: 'Private by default',
-    body: 'Merge, split, rotate, watermark and image tools run entirely in your browser — your files never leave your device.',
+    body: 'Merge, split, organize, watermark and image tools run entirely in your browser. Redaction removes content for good, not just covers it.',
   },
   {
     icon: Gauge,
     color: 'var(--cat-convert-to)',
     title: 'Fast and precise',
-    body: 'Real compression that never makes files bigger, layout-aware Office conversion and table extraction to Excel.',
+    body: 'OCR that makes scans searchable in 9 languages, compression that never makes files bigger, layout-aware Office conversion and table extraction.',
   },
 ];
 

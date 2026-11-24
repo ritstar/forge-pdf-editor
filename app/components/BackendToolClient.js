@@ -43,7 +43,35 @@ const TOOL_CONFIG = {
   'protect-pdf': { accept: PDF_ACCEPT, output: 'Password-protected PDF', action: 'Protect PDF', busy: 'Encrypting…' },
   'pdf-to-pdfa': { accept: PDF_ACCEPT, output: 'PDF/A-2b document', action: 'Convert to PDF/A', busy: 'Converting…' },
   'repair-pdf': { accept: PDF_ACCEPT, output: 'Repaired PDF', action: 'Repair PDF', busy: 'Repairing…' },
+  'ocr-pdf': { accept: PDF_ACCEPT, output: 'Searchable PDF', action: 'Make searchable', busy: 'Recognising text…' },
 };
+
+// Languages installed on the conversion server (see backend/Dockerfile).
+const OCR_LANGUAGES = [
+  { code: 'eng', label: 'English' },
+  { code: 'hin', label: 'Hindi' },
+  { code: 'fra', label: 'French' },
+  { code: 'deu', label: 'German' },
+  { code: 'spa', label: 'Spanish' },
+  { code: 'ita', label: 'Italian' },
+  { code: 'por', label: 'Portuguese' },
+  { code: 'nld', label: 'Dutch' },
+  { code: 'rus', label: 'Russian' },
+];
+const MAX_OCR_LANGUAGES = 3;
+
+function ocrSummary(stats) {
+  if (!stats) return null;
+  if (!stats.recognized) {
+    return stats.skipped === stats.pages
+      ? 'Every page already had selectable text, so nothing needed recognising.'
+      : 'No text was found on the scanned pages.';
+  }
+  const parts = [`Recognised text on ${stats.recognized} ${stats.recognized === 1 ? 'page' : 'pages'}`];
+  if (stats.skipped) parts.push(`${stats.skipped} already had text`);
+  if (stats.rotated?.length) parts.push(`turned ${stats.rotated.length === 1 ? `page ${stats.rotated[0]}` : `${stats.rotated.length} pages`} upright`);
+  return `${parts.join(' · ')}.`;
+}
 
 const COMPRESSION_LEVELS = [
   { value: 'low', title: 'Extreme', detail: 'Smallest file, lower image quality' },
@@ -53,7 +81,7 @@ const COMPRESSION_LEVELS = [
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
-const PDF_INPUT_TOOLS = new Set(['compress-pdf', 'pdf-to-word', 'pdf-to-powerpoint', 'pdf-to-excel', 'unlock-pdf', 'protect-pdf', 'pdf-to-pdfa', 'repair-pdf']);
+const PDF_INPUT_TOOLS = new Set(['compress-pdf', 'pdf-to-word', 'pdf-to-powerpoint', 'pdf-to-excel', 'unlock-pdf', 'protect-pdf', 'pdf-to-pdfa', 'repair-pdf', 'ocr-pdf']);
 
 const STATUS_MESSAGES = {
   401: 'Your session has expired. Please sign in again.',
@@ -137,6 +165,9 @@ export default function BackendToolClient({ toolId }) {
   const [ownerPassword, setOwnerPassword] = useState('');
   const [compressionLevel, setCompressionLevel] = useState('medium');
   const [htmlContent, setHtmlContent] = useState('');
+  const [permissions, setPermissions] = useState({ print: true, copy: true, modify: true });
+  const [languages, setLanguages] = useState(['eng']);
+  const [autoRotate, setAutoRotate] = useState(true);
   const [waitingForServer, setWaitingForServer] = useState(false);
   const server = useBackendStatus();
 
@@ -192,6 +223,13 @@ export default function BackendToolClient({ toolId }) {
       }
       if (toolId === 'protect-pdf') {
         form.append('owner_password', ownerPassword);
+        form.append('allow_print', String(permissions.print));
+        form.append('allow_copy', String(permissions.copy));
+        form.append('allow_modify', String(permissions.modify));
+      }
+      if (toolId === 'ocr-pdf') {
+        form.append('languages', languages.join('+'));
+        form.append('auto_rotate', String(autoRotate));
       }
       if (toolId === 'compress-pdf') {
         form.append('compression_level', compressionLevel);
@@ -216,7 +254,13 @@ export default function BackendToolClient({ toolId }) {
 
       const originalSize = Number(res.headers.get('x-original-size'));
       const outputSize = Number(res.headers.get('x-output-size'));
-      setResult({ blob, filename, originalSize, outputSize });
+      let ocr = null;
+      try {
+        ocr = JSON.parse(res.headers.get('x-forge-ocr') || 'null');
+      } catch {
+        // Stats are informational only.
+      }
+      setResult({ blob, filename, originalSize, outputSize, ocr });
 
       const user = auth.currentUser;
       if (user && tool) {
@@ -297,7 +341,53 @@ export default function BackendToolClient({ toolId }) {
         </>
       ) : null}
 
-      {!['compress-pdf', 'unlock-pdf', 'protect-pdf'].includes(toolId) ? (
+      {toolId === 'protect-pdf' ? (
+        <div className="field">
+          <span className="field-label">People who open it can</span>
+          <label className="check-row"><input type="checkbox" checked={permissions.print} onChange={(e) => setPermissions((p) => ({ ...p, print: e.target.checked }))} /> Print</label>
+          <label className="check-row"><input type="checkbox" checked={permissions.copy} onChange={(e) => setPermissions((p) => ({ ...p, copy: e.target.checked }))} /> Copy text and images</label>
+          <label className="check-row"><input type="checkbox" checked={permissions.modify} onChange={(e) => setPermissions((p) => ({ ...p, modify: e.target.checked }))} /> Edit, comment and fill forms</label>
+          {!(permissions.print && permissions.copy && permissions.modify) && !ownerPassword ? (
+            <span className="field-hint">Restrictions are locked with a separate owner password we generate, so the open password can&apos;t lift them.</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {toolId === 'ocr-pdf' ? (
+        <>
+          <div className="field">
+            <span className="field-label">Document language{languages.length > 1 ? 's' : ''}</span>
+            <div className="chip-list">
+              {OCR_LANGUAGES.map((lang) => {
+                const on = languages.includes(lang.code);
+                return (
+                  <button
+                    key={lang.code}
+                    type="button"
+                    className="chip"
+                    aria-pressed={on}
+                    disabled={!on && languages.length >= MAX_OCR_LANGUAGES}
+                    onClick={() => setLanguages((prev) => (on ? (prev.length > 1 ? prev.filter((c) => c !== lang.code) : prev) : [...prev, lang.code]))}
+                  >
+                    {lang.label}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="field-hint">Pick up to {MAX_OCR_LANGUAGES}. Fewer languages are faster and more accurate.</span>
+          </div>
+          <label className="check-row">
+            <input type="checkbox" checked={autoRotate} onChange={(e) => setAutoRotate(e.target.checked)} />
+            Turn sideways and upside-down pages upright
+          </label>
+          <div className="summary-list">
+            <div><span>Output</span><strong>Searchable PDF</strong></div>
+            <div><span>Looks</span><strong>Unchanged</strong></div>
+          </div>
+        </>
+      ) : null}
+
+      {!['compress-pdf', 'unlock-pdf', 'protect-pdf', 'ocr-pdf'].includes(toolId) ? (
         <div className="summary-list">
           <div><span>Output</span><strong>{config.output}</strong></div>
           <div><span>Max size</span><strong>50 MB</strong></div>
@@ -332,7 +422,9 @@ export default function BackendToolClient({ toolId }) {
             ? saved > 0
               ? `Saved ${saved}% — ${formatFileSize(result.originalSize)} → ${formatFileSize(result.outputSize)}.`
               : 'This PDF is already well optimized; no further reduction was possible.'
-            : `${result.filename} downloaded.`
+            : toolId === 'ocr-pdf' && result.ocr
+              ? ocrSummary(result.ocr)
+              : `${result.filename} downloaded.`
           : null,
         action: {
           label: config.action,
